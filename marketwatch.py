@@ -69,7 +69,7 @@ def send_notification (subject, body, type_id):
 
 def order_thread_exists (threads, order_id):
     for thread in threads:
-        if thread.name == order_id:
+        if int(thread.name) == int(order_id):
             return True
     return False
 

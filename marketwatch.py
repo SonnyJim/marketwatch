@@ -16,29 +16,26 @@ from time import sleep
 from config import *
 
 cache = FileCache(path="/tmp")
-order_list = []
 
 def get_name_from_id (type_id):
     url = "https://esi.evetech.net/latest/universe/names/?datasource=tranquility"
     post = "[ " + str(type_id) + " ]"
     r = requests.post (url, post)
+    if r.status_code != 200:
+        return "Unknown type_id " + str(type_id)
+
     data = json.loads(r.text)[0]
     return str(data['name'])
-
-#TODO
-def order_list_remove (order_id):
-    print ("Removing " + str(order_id) + " from orders_list")
 
 def open_ui_for_type_id (type_id):
     print ("ui: Opening UI for item_id " + str(type_id))
     op = app.op['post_ui_openwindow_marketdetails'](type_id=type_id)
     ui = client.request(op)
 
-    #if (ui.response != 204):
-    #    print ("ui: something went wrong error "+ str(ui.code))
-    #    return 1
+    if (ui.status_code != 204):
+        print ("ui: Error opening window: error "+ str(ui.status_code))
 
-#TODO
+#FIXME
 def send_evemail (subject, body):
     mail = {'approved_cost':10000, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':corporation_id, 'recipient_type':'corporation'}]}
     #It seems sending an evemail to yourself is buggy as shit, they never arrive in the EVE client inbox
@@ -54,7 +51,7 @@ def send_email (subject, body):
     msg['To'] = email_to
     msg['Subject'] = subject
     msg.set_content (body)
-    server = smtplib.SMTP('localhost')
+    server = smtplib.SMTP(email_smtp)
     server.send_message (msg)
     server.quit()
 
@@ -83,8 +80,12 @@ def get_corp_orders():
                 corporation_id=corporation_id
                     )
         orders = client.request(op)
-        if (orders.data == None):
-            print ("orders: Couldn't find any order data")
+        if (orders.status != 200):
+            print ("orders: Couldn't fetch any order data: error " + str(orders.status))
+            exit (1)
+
+        if len(orders.data) == 0:
+                print ("orders: Couldn't find any order data")
 
         #Find the orders and start monitoring them if they aren't already
         for order in orders.data:
@@ -122,15 +123,15 @@ def monitor_order (order_mine, is_buy_order):
     sent_notification = False
     
     while (order_mine['volume_remain'] > 0):
-        #Fetch all the orders for the region
+        #Fetch all the orders for the type_id in the region
         op = app.op['get_markets_region_id_orders'](region_id=region_id,type_id=order_mine['type_id'])
         orders = client.request(op)
-        order_mine_exists = False
-
-        if (orders.data == None):
-            print ("monitor: Couldn't find any orders")
+        
+        if orders.status != 200:
+            print ("monitor: Couldn't fetch orders: error " + str(orders.status))
             return 1
         
+        order_mine_exists = False
         for order in orders.data:
             #Ignore any that aren't in the right location
             if order['location_id'] != location_id:
@@ -150,9 +151,9 @@ def monitor_order (order_mine, is_buy_order):
 
         #Check to see if we actually found our own order
         if len(order_mine) == 0 or order_mine_exists == False:
-            print ("monitor: Couldn't find my order_id: "+ str(order_mine['order_id']) + " " + name + ", maybe it's sold out")
             subject = "EVE Marketwatch: sold out of " + name
             body = "I can't find order id " + str(order_mine['order_id']) + ", looks like we sold all " + str(order_mine['volume_total']) + " of the " + name + " we had listed"
+            print ("monitor: " + body)
             send_notification (subject, body, order_mine['type_id'])
             return 0
 
@@ -165,6 +166,8 @@ def monitor_order (order_mine, is_buy_order):
 
         #Reset the sent_notification if we are currently the best price
         if best_price == order_mine['price']:
+            if sent_notification:
+                print ("monitor: Now currently best price for " + name)
             sent_notification = False
         
         if is_buy_order and best_price > order_mine['price'] and sent_notification != True:

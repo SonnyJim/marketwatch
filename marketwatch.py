@@ -40,13 +40,13 @@ def open_ui_for_type_id (type_id):
 
 #TODO
 def send_evemail (subject, body):
-    print ("Sending evemail")
     mail = {'approved_cost':10000, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':corporation_id, 'recipient_type':'corporation'}]}
+    #It seems sending an evemail to yourself is buggy as shit, they never arrive in the EVE client inbox
+    #mail = {'approved_cost':0, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':character_id, 'recipient_type':'character'}]}
     op = app.op ['post_characters_character_id_mail'](
             character_id=character_id,
             mail=mail)
     r = client.request(op)
-    print (r.data)
 
 def send_email (subject, body):
     msg = EmailMessage()
@@ -67,36 +67,41 @@ def send_notification (subject, body, type_id):
     if notify_by_ui:
         open_ui_for_type_id (type_id)
 
+def order_thread_exists (threads, order_id):
+    for thread in threads:
+        if thread.name == order_id:
+            return True
+    return False
+
 def get_corp_orders():
     name = get_name_from_id (corporation_id)
     print ("orders: Fetching market orders for " + name)
-
-    op = app.op['get_corporations_corporation_id_orders'](
-            corporation_id=corporation_id
-                )
-    orders = client.request(op)
-    if (orders.data == None):
-        print ("orders: Couldn't find any orders")
-        return 1
-    
     threads = []
-
-    #Find the orders and add them to the list if they aren't there already
-    for order in orders.data:
-        if order['location_id'] == location_id and order['order_id'] not in order_list:
-                print ("orders: Found order_id " + str(order['order_id']))
-                
-                if 'is_buy_order' in order:
-                    is_buy_order = True
-                else:
-                    is_buy_order = False
-
-                order_list.append({'order_id':order['order_id'], 'type_id':order['type_id'], 'is_buy_order':is_buy_order})
-                #Start a new thread to monitor the price
-                t = threading.Thread(target=monitor_order, args=(order, is_buy_order), name=order['order_id'])
-                threads.append(t)
-                t.start()
     
+    while (1):
+        op = app.op['get_corporations_corporation_id_orders'](
+                corporation_id=corporation_id
+                    )
+        orders = client.request(op)
+        if (orders.data == None):
+            print ("orders: Couldn't find any order data")
+
+        #Find the orders and start monitoring them if they aren't already
+        for order in orders.data:
+            if order['location_id'] == location_id and not order_thread_exists (threads, order['order_id']):
+                    print ("orders: Found order_id " + str(order['order_id']))
+                    
+                    if 'is_buy_order' in order:
+                        is_buy_order = True
+                    else:
+                        is_buy_order = False
+
+                    #Start a new thread to monitor the price
+                    t = threading.Thread(target=monitor_order, args=(order, is_buy_order), name=order['order_id'])
+                    threads.append(t)
+                    t.start()
+        sleep(60)
+        
 #Monitors an order_id for changes
 def monitor_order (order_mine, is_buy_order):
 
@@ -110,6 +115,7 @@ def monitor_order (order_mine, is_buy_order):
     
     #Start off assuming that we have the best price already
     best_price = order_mine['price']
+    best_price_old = best_price
 
     volume_remain_old = order_mine['volume_remain']
 
@@ -148,11 +154,11 @@ def monitor_order (order_mine, is_buy_order):
             subject = "EVE Marketwatch: sold out of " + name
             body = "I can't find order id " + str(order_mine['order_id']) + ", looks like we sold all " + str(order_mine['volume_total']) + " of the " + name + " we had listed"
             send_notification (subject, body, order_mine['type_id'])
-            return 1
+            return 0
 
         #Notify us about the current state of our order
         #print ("monitor: " + name + " best price: " + str(best_price) + ", my price: " +str(order_mine['price']))
-
+        
         if order_mine['volume_remain'] < volume_remain_old:
             volume_remain_old = order_mine['volume_remain']
             print ("monitor: " + name + " " + str(order_mine['volume_remain']) + "/" + str(order_mine['volume_total']))
@@ -185,10 +191,10 @@ def do_security():
     global client
     global app
     print ("security: Authenticating")
-    #Open up the token file
+
+    #Retrieve the tokens from the film
     with open("tokens.txt", "rb") as fp:
         tokens_file = pickle.load(fp)
-
     fp.close()
 
     esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
@@ -222,6 +228,7 @@ def main():
     print ("Startin' Marketwatch")
     do_security()
     get_corp_orders()
+    print ("Exiting....")
 
     
 if __name__ == "__main__":

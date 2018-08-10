@@ -15,7 +15,21 @@ from email.message import EmailMessage
 from time import sleep
 from config import *
 
+#FIXME Need to look at the range from the station for the buy orders
+
 cache = FileCache(path="/tmp")
+
+def distance_from_station (origin, destination):
+    #print ("distance: Calculating route from " + str(origin) + " to " + str(destination))
+    op = app.op['get_route_origin_destination'](origin=origin, destination=destination)
+    r = client.request(op)
+
+    if r.status != 200:
+        print ("distance: Couldn't get distance from station: error " + str(r.status))
+        return 1
+
+    distance = len(r.data)
+    return distance
 
 def get_name_from_id (type_id):
     url = "https://esi.evetech.net/latest/universe/names/?datasource=tranquility"
@@ -133,8 +147,17 @@ def monitor_order (order_mine, is_buy_order):
         
         order_mine_exists = False
         for order in orders.data:
-            #Ignore any that aren't in the right location
-            if order['location_id'] != location_id:
+            if is_buy_order and order['is_buy_order']: #Calculate the distance from the station for buy orders
+                distance = distance_from_station (system_id, order['system_id'])
+                if order['range'] == 'station' or order['range'] == 'solarsystem':
+                    order_range = 1
+                elif order['range'] == 'region':
+                    order_range = 50
+                else:
+                    order_range = int(order['range'])
+                if distance > order_range:
+                    continue
+            elif order['location_id'] != location_id: #ignore if it's a sell order that isn't this station
                 continue
             #Found my own order, update it's details (price/quantity etc)
             if order['order_id'] == order_mine['order_id']:
@@ -160,7 +183,7 @@ def monitor_order (order_mine, is_buy_order):
         #Notify us about the current state of our order
         #print ("monitor: " + name + " best price: " + str(best_price) + ", my price: " +str(order_mine['price']))
         
-        if order_mine['volume_remain'] < volume_remain_old:
+        if order_mine['volume_remain'] != volume_remain_old:
             volume_remain_old = order_mine['volume_remain']
             print ("monitor: " + name + " " + str(order_mine['volume_remain']) + "/" + str(order_mine['volume_total']))
 

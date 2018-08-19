@@ -21,8 +21,8 @@ cache = FileCache(path="/tmp")
 
 def distance_from_station (origin, destination):
     #print ("distance: Calculating route from " + str(origin) + " to " + str(destination))
-    op = app.op['get_route_origin_destination'](origin=origin, destination=destination)
-    r = client.request(op)
+    op = industry_char.app.op['get_route_origin_destination'](origin=origin, destination=destination)
+    r = industry_char.client.request(op)
 
     if r.status != 200:
         print ("distance: Couldn't get distance from station: error " + str(r.status))
@@ -43,21 +43,38 @@ def get_name_from_id (type_id):
 
 def open_ui_for_type_id (type_id):
     print ("ui: Opening UI for item_id " + str(type_id))
-    op = app.op['post_ui_openwindow_marketdetails'](type_id=type_id)
-    ui = client.request(op)
+    op = industry_char.app.op['post_ui_openwindow_marketdetails'](type_id=type_id)
+    ui = industry_char.client.request(op)
 
     if (ui.status_code != 204):
         print ("ui: Error opening window: error "+ str(ui.status_code))
 
-#FIXME
+def check_if_evemail_read (mail_id):
+    #print ("mail: Checking to see if mail_id " + str(mail_id) + " has been read")
+    op = industry_char.app.op['get_characters_character_id_mail_mail_id'](mail_id=mail_id, character_id=character_id)
+    r = industry_char.client.request(op)
+
+    if (r.status != 200):
+        print ("mail: Error fetching mail "+ str(ui.status_code))
+        return False
+   
+    print (r.data)
+    if 'read' in r.data:
+        #print ("Mail read")
+        return True
+    else:
+        return False
+
 def send_evemail (subject, body):
-    mail = {'approved_cost':10000, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':corporation_id, 'recipient_type':'corporation'}]}
-    #It seems sending an evemail to yourself is buggy as shit, they never arrive in the EVE client inbox
-    #mail = {'approved_cost':0, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':character_id, 'recipient_type':'character'}]}
-    op = app.op ['post_characters_character_id_mail'](
-            character_id=character_id,
+    #mail = {'approved_cost':10000, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':corporation_id, 'recipient_type':'corporation'}]}
+    mail = {'approved_cost':0, 'body':body, 'subject':subject, 'recipients':[{'recipient_id':character_id, 'recipient_type':'character'}]}
+    op = mail_char.app.op ['post_characters_character_id_mail'](
+            character_id=mail_character_id,
             mail=mail)
-    r = client.request(op)
+    r = mail_char.client.request(op)
+    
+    #Return the mailid
+    return r.data
 
 def send_email (subject, body):
     msg = EmailMessage()
@@ -71,12 +88,15 @@ def send_email (subject, body):
 
 def send_notification (subject, body, type_id):
     print ("notify: Sending notification " + subject)
+    mail_id = 0
     if notify_by_email:
         send_email (subject, body)
     if notify_by_evemail:
-        send_evemail (subject, body)
+        mail_id = send_evemail (subject, body)
     if notify_by_ui:
         open_ui_for_type_id (type_id)
+
+    return mail_id
 
 def order_thread_exists (threads, order_id):
     for thread in threads:
@@ -90,10 +110,10 @@ def get_corp_orders():
     threads = []
     
     while (1):
-        op = app.op['get_corporations_corporation_id_orders'](
+        op = industry_char.app.op['get_corporations_corporation_id_orders'](
                 corporation_id=corporation_id
                     )
-        orders = client.request(op)
+        orders = industry_char.client.request(op)
         if (orders.status != 200):
             print ("orders: Couldn't fetch any order data: error " + str(orders.status))
             exit (1)
@@ -135,11 +155,12 @@ def monitor_order (order_mine, is_buy_order):
     volume_remain_old = order_mine['volume_remain']
 
     sent_notification = False
-    
+    mail_id = 0
+
     while (order_mine['volume_remain'] > 0):
         #Fetch all the orders for the type_id in the region
-        op = app.op['get_markets_region_id_orders'](region_id=region_id,type_id=order_mine['type_id'])
-        orders = client.request(op)
+        op = industry_char.app.op['get_markets_region_id_orders'](region_id=region_id,type_id=order_mine['type_id'])
+        orders = industry_char.client.request(op)
         
         if orders.status != 200:
             print ("monitor: Couldn't fetch orders: error " + str(orders.status))
@@ -173,11 +194,11 @@ def monitor_order (order_mine, is_buy_order):
                     best_price = order['price']
 
         #Check to see if we actually found our own order
-        if len(order_mine) == 0 or order_mine_exists == False:
+        if len(order_mine) == 0 or order_mine_exists == False :
             subject = "EVE Marketwatch: sold out of " + name
             body = "I can't find order id " + str(order_mine['order_id']) + ", looks like we sold all " + str(order_mine['volume_total']) + " of the " + name + " we had listed"
             print ("monitor: " + body)
-            send_notification (subject, body, order_mine['type_id'])
+            mail_id = send_notification (subject, body, order_mine['type_id'])
             return 0
 
         #Notify us about the current state of our order
@@ -193,11 +214,17 @@ def monitor_order (order_mine, is_buy_order):
                 print ("monitor: Now currently best price for " + name)
             sent_notification = False
         
+        #Check to see if we've read the evemail
+        if mail_id != 0 and send_evemail == True:
+            if check_if_evemail_read (mail_id):
+                mail_id = 0
+                sent_notification = False
+
         if is_buy_order and best_price > order_mine['price'] and sent_notification != True:
             subject = "EVE Marketwatch: " + name
             body = "monitor: Not winning " + name + " buy order, use price: " + str(best_price + 0.01)
             print (body)
-            send_notification (subject, body, order_mine['type_id'])
+            mail_id = send_notification (subject, body, order_mine['type_id'])
             sent_notification = True
 
 
@@ -214,41 +241,43 @@ def monitor_order (order_mine, is_buy_order):
 
 
 def do_security():
-    global client
-    global app
-    print ("security: Authenticating")
+    global industry_char, mail_char
 
-    #Retrieve the tokens from the film
-    with open("tokens.txt", "rb") as fp:
-        tokens_file = pickle.load(fp)
-    fp.close()
+    industry_char = Char("tokens.txt")
+    mail_char = Char("tokens_mail.txt")
 
-    esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
-    app = esi_app.get_latest_swagger
+class Char:
+    def __init__(self, token_file):
+        #Retrieve the tokens from the file
+        with open(token_file, "rb") as fp:
+            tokens_file = pickle.load(fp)
+        fp.close()
 
-    security = EsiSecurity(
-            redirect_uri=redirect_uri,
-            client_id=client_id,
-            secret_key=secret_key,
-            headers=headers
-            )
+        esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
+        self.app = esi_app.get_latest_swagger
 
-    client = EsiClient(
-            retry_requests=True,
-            headers=headers,
-            security=security
-            )
+        self.security = EsiSecurity(
+                redirect_uri=redirect_uri,
+                client_id=client_id,
+                secret_key=secret_key,
+                headers=headers
+                )
 
-    security.update_token({
-        'access_token': '',
-        'expires_in': -1,
-        'refresh_token': tokens_file['refresh_token']
-        })
+        self.client = EsiClient(
+                retry_requests=True,
+                headers=headers,
+                security=self.security
+                )
 
-    tokens = security.refresh()
-    api_info = security.verify()
-    print ("security: Authenticated for " + str(api_info['Scopes']))
+        self.security.update_token({
+            'access_token': '',
+            'expires_in': -1,
+            'refresh_token': tokens_file['refresh_token']
+            })
 
+        tokens = self.security.refresh()
+        api_info = self.security.verify()
+        print ("security: Authenticated for " + str(api_info['Scopes']))
 
 def main():
     print ("Startin' Marketwatch")

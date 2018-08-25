@@ -19,7 +19,51 @@ cache = FileCache(path="/tmp")
 #Get's confused with BPCs, seems to be comparing it against BPOs
 #Adds in the value of rigs fitted to ships
 #Damaged crystals are unsellable but still counted in the valuation
-#Includes 'you will pay' items as well
+#Calculate cost of 'you will pay' items
+#Generate a report rather than opening the UI each time
+#db_add_contract will probably fail on items with a ' in the name like auggy drones
+
+def db_open_contract_db ():
+    if verbose:
+        print ("Opening connection to contract database")
+
+    db_contract_file = "./contracts.db"
+    conn = sqlite3.connect(db_contract_file)
+    c = conn.cursor()
+    
+    sql = "CREATE TABLE IF NOT EXISTS contracts (contract_id INTEGER PRIMARY_KEY, checked BOOLEAN, \
+        location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items CHAR(2048))" 
+    c.execute(sql)
+    conn.commit ()
+    return conn
+
+
+def db_add_contract (contract_id, location_id, buy, sell, price, items):
+    if verbose:
+        print ("Adding contract id " + str(contract_id) + " to database")
+
+    c = db_contract.cursor()
+    try:
+        c.execute("INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items) \
+                VALUES ({ci}, 'TRUE', {li}, {buy}, {sell}, {price}, '{items}')".\
+                            format(ci=contract_id, li=location_id, buy=buy, sell=sell, price=price, items=items))
+    except sqlite3.IntegrityError:
+            print('ERROR: ID already exists in PRIMARY KEY column {}'.format(id_column))
+    db_contract.commit()
+
+def db_check_contract (contract_id):
+    if verbose:
+        print ("Checking to see if we have contract " + str(contract_id) + " in the database")
+
+    sql = "SELECT checked FROM contracts WHERE contract_id=" + str(contract_id)
+    c = db_contract.cursor()
+    c.execute(sql)
+    r = c.fetchone()
+    print (r)
+    if r is None:
+        return False
+    else:
+        return True
 
 def do_security():
     global client
@@ -66,14 +110,20 @@ def open_ui_for_contract (contract_id):
     #    print ("ui: Error opening window: error "+ str(ui.status_code))
 
 def fetch_appraisal (text):
-    print ("Fetching appraisal")
     if len(text) == 0:
-        print ("Error:  appraisal text empty")
-        return 
+        if verbose:
+            print ("Error:  appraisal text empty")
+        return None
+    if verbose:
+        print ("Fetching appraisal")
+
 
     market = "jita"
-    url = "https://evepraisal.com/appraisal.json?market=" + market + "&raw_textarea=" + text + "&persist=no"
-    r = requests.post (url, headers=headers)
+    #url = "https://evepraisal.com/appraisal.json?market=" + market + "&raw_textarea=" + text + "&persist=no"
+    url = "https://evepraisal.com/appraisal.json?market=" + market + "&persist=no"
+    if verbose:
+        print (text)
+    r = requests.post (url, headers=headers, data=text)
     
     if r.status_code !=200:
         print ("Error fetching appraisal: " + str(r.status_code))
@@ -85,18 +135,28 @@ def fetch_appraisal (text):
     return appraisal
 
 def create_appraisal (contract_items):
-    print ("Creating appraisal list")
+    if verbose:
+        print ("Creating appraisal list")
     appraisal_text = ""
     for contract_item in contract_items:
-        if 'is_blueprint_copy' in contract_item:
-            continue
         # Seller is asking for item in return
         if contract_item['is_included'] is False:
             continue
-        print (get_name_from_type_id(conn, contract_item['type_id']) + " x " + str(contract_item['quantity']))
-        appraisal_text += get_name_from_type_id (conn, contract_item['type_id'])
+        if 'is_blueprint_copy' in contract_item:
+            continue
+        
+        #Fetch the name, as evepraisal seems to work that way
+        name = get_name_from_type_id (db_sde, contract_item['type_id'])
+        if "Abyssal" in name:
+            continue
+        #if 'is_singleton' in contract_item:
+        #    print ("Error: item is fitted to ship? " + get_name_from_type_id (conn, contract_item['type_id']))
+        #    continue
+        #print (get_name_from_type_id(conn, contract_item['type_id']) + " x " + str(contract_item['quantity']))
+        appraisal_text += name
         appraisal_text += " " + str(contract_item['quantity'])
         appraisal_text += "\r\n"
+
     return appraisal_text
 
 def get_appraisal (contract_items):
@@ -105,14 +165,16 @@ def get_appraisal (contract_items):
     return appraisal
 
 def get_contract_items (contract_id):
-    print ("Getting items for contract_id: " + str(contract_id))
+    if verbose:
+        print ("Getting items for contract_id: " + str(contract_id))
     items = []
     url = "https://esi.evetech.net/latest/contracts/public/items/" + str(contract_id) + "/?datasource=tranquility&page=1"
     r = requests.get (url, headers=headers)
     if r.status_code != 200:
         print ("get_contract_items: Error " + str(r.status_code))
+        return
         #exit (1)
-
+    
     if int(r.headers['X-Pages']) > 1:
         print ("Found more than one page of results, we should be looping right now")
         exit (1)
@@ -141,6 +203,7 @@ def check_if_expired (expiry_str):
         return False
 
 def extract_contract_ids (contract_type, contracts):
+    global contract_count
     print ("Extracting contract_ids for type: " + str(contract_type))
     contract_ids = []
     prices = []
@@ -148,7 +211,9 @@ def extract_contract_ids (contract_type, contracts):
         if contract['type'] == contract_type and not check_if_expired (contract['date_expired']):
             contract_ids.append (contract['contract_id'])
             prices.append (contract['price'])
-
+   
+    contract_count = len(contract_ids)
+    print ("Found " + str(contract_count) + " contracts to search")
     return contract_ids, prices
 
 def get_contract (contract_id):
@@ -176,46 +241,132 @@ def get_contracts_for_region (region_id):
     contracts = json.loads(r.text)
     return contracts
 
+def get_contract_element (contract_id, element):
+    for contract in contracts:
+        if contract['contract_id'] == contract_id:
+            return contract[element]
 
-def main():
-    global contracts
-    global conn
-    print ("Startin' muta watch")
-    region_id = input ("Enter in region id: ")
-    #region_id = 10000016
-    conn = sql_sde_connect_to_db ()
-    do_security ()
+def get_contract_location (contract_id):
+    location_id = get_contract_element (contract_id, 'start_location_id')
+
+    return location_id
+
+def get_contract_security (contract_id):
+    location_id = get_contract_location (contract_id)
+    return get_station_security (db_sde, location_id)
+
+def make_stars (length):
+    text = ""
+    i = 0
+    while i < length:
+        text += "*"
+        i += 1
+    return text
+
+def check_region (region_id):
     contracts = get_contracts_for_region (region_id)
     contract_ids = extract_contract_ids ("item_exchange", contracts)
     
     #Unpack the tuple - FIXME
     prices = contract_ids[1]
     contract_ids = contract_ids[0]
-    
+    contracts_checked = 0
     for contract_id in contract_ids:
-        print ("Contract ID: " + str(contract_id))
+        contracts_checked += 1
+        
+        label = (str(contracts_checked) + "/" + str(contract_count) + " Contract ID: " + str(contract_id))
+        stars = make_stars (len(label))
+        if verbose:
+            print ("")
+            print (stars)
+        print (label)
+        if verbose:
+            print (stars)
+        
+        if db_check_contract (contract_id) is True:
+            if verbose:
+                print ("Contract ID " + str(contract_id) + " is already in the database")
+            continue
+
         contract_items = get_contract_items (contract_id)
+        
+        
+        if contract_items == None:
+            print ("Error:  Couldn't find any contract items")
+            continue
+
         price = prices[contract_ids.index(contract_id)]
-        print ("Contract Price: " + str(price))
-        appraisal = get_appraisal (contract_items)
+        items = create_appraisal (contract_items)
+        appraisal = fetch_appraisal (items)
+        #appraisal = get_appraisal (contract_items)
+
+        
+        if appraisal is None:
+            if verbose:
+                print ("Nothing to appraise")
+            db_add_contract (contract_id, 0, 0, 0, 0, "BLUEPRINT COPIES")
+            continue
         try:
-            print (appraisal['appraisal']['totals'])
             buy = appraisal['appraisal']['totals']['buy']
             sell = appraisal['appraisal']['totals']['sell']
+        except:
+            buy = 0
+            sell = 0
 
-            target = sell
+        target = sell
 
-            if target > price:
-                profit = target - price
-                print ("AWOOOGA PROFIT " + format(profit, ',f'))
-                open_ui_for_contract (contract_id)
-                input ()
-        except NameError:
-            print ("Error getting appraisal information for contract")
-        except TypeError:
-            print ("TypeError getting appraisal information")
+        try:
+            location_id = get_contract_location (contract_id)
+        except:
+            print ("Error fetching location_id for contract " + str(contract_id))
+            location_id = 0
 
+        try:
+            security = get_station_security (location_id)
+        except:
+            print ("Error fetching security for location " + str(location_id))
 
+        if verbose:
+            print ("Sell: " + format(sell, ',.2f'))
+            print ("Buy: " + format(buy, ',.2f'))
+            print ("Contract Price: " + format(price, ',.2f'))
+            profit = target - price
+
+        
+        db_add_contract (contract_id, location_id, buy, sell, price, items)
+        if target > price:
+            print ("Sell: " + format(sell, ',.2f'))
+            print ("Buy: " + format(buy, ',.2f'))
+            print ("Contract Price: " + format(price, ',.2f'))
+            profit = target - price
+            print ("Awooga Profit " + format(profit, ',.2f'))
+            open_ui_for_contract (contract_id)
+            input ()
+
+def main():
+    global contracts
+    global db_sde #SDE connection
+    global db_contract
+    global verbose
+
+    print ("Startin' muta watch")
+    print ("10000002 The Forge")
+    print ("10000037 Everyshore")
+    print ("10000032 Sinq Laison")
+    print ("10000033 The Citadel")
+    print ("10000043 Domain")
+    print ("10000064 Essence")
+    
+    regions = (10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
+    verbose = True
+    #region_id = input ("Enter in region id: ")
+    #region_id = 10000016
+    db_sde = sql_sde_connect_to_db ()
+    db_contract = db_open_contract_db ()
+    do_security ()
+    
+    for region_id in regions:
+        check_region (region_id)
     print ("Exiting....")
 
     

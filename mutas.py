@@ -22,6 +22,8 @@ cache = FileCache(path="/tmp")
 #Calculate cost of 'you will pay' items
 #Generate a report rather than opening the UI each time
 #db_add_contract will probably fail on items with a ' in the name like auggy drones
+#Some weird encoding problems
+#Can't get security information for structures, as I don't know what systems they are in.
 
 def db_open_contract_db ():
     if verbose:
@@ -32,24 +34,27 @@ def db_open_contract_db ():
     c = conn.cursor()
     
     sql = "CREATE TABLE IF NOT EXISTS contracts (contract_id INTEGER PRIMARY_KEY, checked BOOLEAN, \
-        location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items CHAR(2048), security FLOAT, expiry CHAR(128), priority INTEGER)" 
+        location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items CHAR(8192), security FLOAT, \
+        expiry CHAR(128), priority INTEGER, region_id INTEGER)" 
     c.execute(sql)
     conn.commit ()
     return conn
 
 
-def db_add_contract (contract_id, location_id, buy, sell, price, items, security, expiry, priority):
+def db_add_contract (contract_id, location_id, buy, sell, price, items, security, expiry, priority, region_id):
     if verbose:
         print ("Adding contract id " + str(contract_id) + " to database")
 
     c = db_contract.cursor()
     try:
-        c.execute('INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items, security, expiry, priority) \
-                VALUES ({ci}, "TRUE", {li}, {buy}, {sell}, {price}, "{items}", {security}, "{expiry}", {priority})'.\
+        c.execute('INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items, security, expiry, priority, region_id) \
+                VALUES ({ci}, "TRUE", {li}, {buy}, {sell}, {price}, "{items}", {security}, "{expiry}", {priority}, {region_id})'.\
                             format(ci=contract_id, li=location_id, buy=buy, sell=sell, price=price, items=items, \
-                            security=security, expiry=expiry, priority=priority))
+                            security=security, expiry=expiry, priority=priority, region_id=region_id))
     except sqlite3.IntegrityError:
-            print('ERROR: ID already exists in PRIMARY KEY column {}'.format(id_column))
+        print('Error: ID already exists in PRIMARY KEY column {}'.format(id_column))
+    except sqlite3.OperationalError:
+        print ("Error adding contract to database: " + str(items))
     db_contract.commit()
 
 def db_check_contract (contract_id):
@@ -294,14 +299,19 @@ def check_region (region_id):
 
         price = prices[contract_ids.index(contract_id)]
         items = create_appraisal (contract_items)
-        appraisal = fetch_appraisal (items)
+
+        #items = items.encode ('latin-1', 'ignore')
+        try:
+            appraisal = fetch_appraisal (items)
+        except:
+            print ("Error fetching appraisal for items: " + items)
         #appraisal = get_appraisal (contract_items)
 
         
         if appraisal is None:
             if verbose:
                 print ("Nothing to appraise")
-            db_add_contract (contract_id, 0, 0, 0, 0, "BLUEPRINT COPIES", 2, "UNKNOWN", 6)
+            db_add_contract (contract_id, 0, 0, 0, 0, "BLUEPRINT COPIES", 2, "UNKNOWN", 6, region_id)
             continue
         try:
             buy = appraisal['appraisal']['totals']['buy']
@@ -321,7 +331,10 @@ def check_region (region_id):
         location_id = contract['start_location_id']
 
         try:
-            security = get_station_security (db_sde, location_id)
+            if len(str(location_id)) == 8:
+                security = get_station_security (db_sde, location_id)
+            else:
+                print ("Can't get security information for structure_id's right now")
         except:
             print ("Error fetching security for location " + str(location_id))
             security = 2
@@ -346,7 +359,7 @@ def check_region (region_id):
         else:
             priority = 0
 
-        db_add_contract (contract_id, location_id, buy, sell, price, items, security, expiry, priority)
+        db_add_contract (contract_id, location_id, buy, sell, price, items, security, expiry, priority, region_id)
         if target > price:
             print ("Sell: " + format(sell, ',.2f'))
             print ("Buy: " + format(buy, ',.2f'))
@@ -363,6 +376,10 @@ def main():
     global verbose
 
     print ("Startin' muta watch")
+    print ("10000067 Genesis")
+    print ("10000065 Kor-Azor")
+    print ("10000020 Tash-Murkon")
+    print ("10000001 Derelick")
     print ("10000036 Devoid")
     print ("10000030 Heimatar")
     print ("10000042 Metropolis")
@@ -373,10 +390,8 @@ def main():
     print ("10000043 Domain")
     print ("10000064 Essence")
     
-    regions = (10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
-    verbose = False
-    #region_id = input ("Enter in region id: ")
-    #region_id = 10000016
+    regions = (10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
+    verbose = True
     db_sde = sql_sde_connect_to_db ()
     db_contract = db_open_contract_db ()
     do_security ()

@@ -32,21 +32,22 @@ def db_open_contract_db ():
     c = conn.cursor()
     
     sql = "CREATE TABLE IF NOT EXISTS contracts (contract_id INTEGER PRIMARY_KEY, checked BOOLEAN, \
-        location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items CHAR(2048))" 
+        location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items CHAR(2048), security FLOAT, expiry CHAR(128), priority INTEGER)" 
     c.execute(sql)
     conn.commit ()
     return conn
 
 
-def db_add_contract (contract_id, location_id, buy, sell, price, items):
+def db_add_contract (contract_id, location_id, buy, sell, price, items, security, expiry, priority):
     if verbose:
         print ("Adding contract id " + str(contract_id) + " to database")
 
     c = db_contract.cursor()
     try:
-        c.execute("INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items) \
-                VALUES ({ci}, 'TRUE', {li}, {buy}, {sell}, {price}, '{items}')".\
-                            format(ci=contract_id, li=location_id, buy=buy, sell=sell, price=price, items=items))
+        c.execute('INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items, security, expiry, priority) \
+                VALUES ({ci}, "TRUE", {li}, {buy}, {sell}, {price}, "{items}", {security}, "{expiry}", {priority})'.\
+                            format(ci=contract_id, li=location_id, buy=buy, sell=sell, price=price, items=items, \
+                            security=security, expiry=expiry, priority=priority))
     except sqlite3.IntegrityError:
             print('ERROR: ID already exists in PRIMARY KEY column {}'.format(id_column))
     db_contract.commit()
@@ -59,7 +60,6 @@ def db_check_contract (contract_id):
     c = db_contract.cursor()
     c.execute(sql)
     r = c.fetchone()
-    print (r)
     if r is None:
         return False
     else:
@@ -216,7 +216,7 @@ def extract_contract_ids (contract_type, contracts):
     print ("Found " + str(contract_count) + " contracts to search")
     return contract_ids, prices
 
-def get_contract (contract_id):
+def get_contract (contract_id, contracts):
     for contract in contracts:
         if contract['contract_id'] == contract_id:
             return contract
@@ -241,19 +241,11 @@ def get_contracts_for_region (region_id):
     contracts = json.loads(r.text)
     return contracts
 
-def get_contract_element (contract_id, element):
+def get_contract_location (contract_id, contracts):
     for contract in contracts:
         if contract['contract_id'] == contract_id:
-            return contract[element]
-
-def get_contract_location (contract_id):
-    location_id = get_contract_element (contract_id, 'start_location_id')
-
-    return location_id
-
-def get_contract_security (contract_id):
-    location_id = get_contract_location (contract_id)
-    return get_station_security (db_sde, location_id)
+            return contract['start_location_id']
+    return 0
 
 def make_stars (length):
     text = ""
@@ -287,6 +279,11 @@ def check_region (region_id):
             if verbose:
                 print ("Contract ID " + str(contract_id) + " is already in the database")
             continue
+        try: 
+            contract = get_contract (contract_id, contracts)
+            expiry = contract['date_expired']
+        except:
+            expiry = "UNKNOWN"
 
         contract_items = get_contract_items (contract_id)
         
@@ -304,7 +301,7 @@ def check_region (region_id):
         if appraisal is None:
             if verbose:
                 print ("Nothing to appraise")
-            db_add_contract (contract_id, 0, 0, 0, 0, "BLUEPRINT COPIES")
+            db_add_contract (contract_id, 0, 0, 0, 0, "BLUEPRINT COPIES", 2, "UNKNOWN", 6)
             continue
         try:
             buy = appraisal['appraisal']['totals']['buy']
@@ -313,35 +310,51 @@ def check_region (region_id):
             buy = 0
             sell = 0
 
-        target = sell
+        target = buy
+
+        #try:
+        #    location_id = get_contract_location (contract_id, contracts)
+        #except:
+        #    print ("Error fetching location_id for contract " + str(contract_id))
+        #    print (get_contract (contract_id))
+        #    location_id = 0
+        location_id = contract['start_location_id']
 
         try:
-            location_id = get_contract_location (contract_id)
-        except:
-            print ("Error fetching location_id for contract " + str(contract_id))
-            location_id = 0
-
-        try:
-            security = get_station_security (location_id)
+            security = get_station_security (db_sde, location_id)
         except:
             print ("Error fetching security for location " + str(location_id))
+            security = 2
 
         if verbose:
             print ("Sell: " + format(sell, ',.2f'))
             print ("Buy: " + format(buy, ',.2f'))
             print ("Contract Price: " + format(price, ',.2f'))
-            profit = target - price
-
         
-        db_add_contract (contract_id, location_id, buy, sell, price, items)
+        profit = target - price
+        
+        if profit > 50000000:
+            priority = 5
+        elif profit > 25000000:
+            priority = 4
+        elif profit > 10000000:
+            priority = 3
+        elif profit > 5000000:
+            priority = 2
+        elif profit > 1000000:
+            priority = 1
+        else:
+            priority = 0
+
+        db_add_contract (contract_id, location_id, buy, sell, price, items, security, expiry, priority)
         if target > price:
             print ("Sell: " + format(sell, ',.2f'))
             print ("Buy: " + format(buy, ',.2f'))
             print ("Contract Price: " + format(price, ',.2f'))
             profit = target - price
             print ("Awooga Profit " + format(profit, ',.2f'))
-            open_ui_for_contract (contract_id)
-            input ()
+            #open_ui_for_contract (contract_id)
+            #input ()
 
 def main():
     global contracts
@@ -350,6 +363,9 @@ def main():
     global verbose
 
     print ("Startin' muta watch")
+    print ("10000036 Devoid")
+    print ("10000030 Heimatar")
+    print ("10000042 Metropolis")
     print ("10000002 The Forge")
     print ("10000037 Everyshore")
     print ("10000032 Sinq Laison")
@@ -357,8 +373,8 @@ def main():
     print ("10000043 Domain")
     print ("10000064 Essence")
     
-    regions = (10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
-    verbose = True
+    regions = (10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
+    verbose = False
     #region_id = input ("Enter in region id: ")
     #region_id = 10000016
     db_sde = sql_sde_connect_to_db ()

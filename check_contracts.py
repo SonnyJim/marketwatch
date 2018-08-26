@@ -55,17 +55,25 @@ def distance_from_station (origin, destination):
     return distance
 
 
+#db_add_contract (contract_id, location_id, buy, sell, price, sell_exchange, items, items_exchange, security, expiry, priority, region_id)
 def process_row (row):
     contract_id = row[0]
     location_id = row[2]
     buy = row[3]
     sell = row[4]
     price = row[5]
-    items = row[6]
-    security = row[7]
-    expiry = row[8]
-    priority = row[9]
+    sell_exchange = row[6]
+    items = row[7]
+    items_exchange = row[8]
+    security = row[9]
+    expiry = row[10]
+    priority = row[11]
+    region_id = row[12]
     
+    if security < float(min_security):
+        print ("Ignoring contract due to low security")
+        return
+
     if len(str(location_id)) == 8:
         dest_system_id = get_station_solar_system_id (location_id)
     else:
@@ -80,6 +88,10 @@ def process_row (row):
     #    return
 
     print (items)
+
+    if len(items_exchange) != 0:
+        print ("Exchange items: ")
+        print (items_exchange)
     
     print ("Contract ID: " +str(contract_id))
     print ("Priority: " + str(priority))
@@ -92,6 +104,7 @@ def process_row (row):
     else:
         print ("Security: Unknown")
     
+    print ("Region: " + str(get_region_from_region_id(sde_conn, region_id)))
     if distance >= 0:
         print ("Jumps: " + str(distance))
     print ("Sell: " + format(sell, ',.2f'))
@@ -121,7 +134,9 @@ def update_contract_priority (contract_id, priority):
     conn.commit()
 
 def db_check_contracts (conn, order_type):
-    sql = "SELECT * FROM contracts WHERE " + order_type + " > price ORDER BY priority DESC"
+    #sql = "SELECT * FROM contracts WHERE " + order_type + " > price ORDER BY priority DESC"
+    #sql = "SELECT * FROM contracts price ORDER BY priority DESC, profit_buy DESC"
+    sql = "SELECT * FROM contracts price ORDER BY profit_buy DESC"
     c = conn.cursor()
     c.execute(sql)
     rows = c.fetchall()
@@ -173,10 +188,16 @@ def open_ui_for_contract (contract_id):
     #    print ("ui: Error opening window: error "+ str(ui.status_code))
 def main():
     global conn
+    global sde_conn
+    global min_security
     do_security ()
-    #open_ui_for_contract (135920680)
+    #open_ui_for_contract (135163291)
     #input()
+    min_security = input ("Minimum security: ")
+    if min_security == "":
+        min_security = -2
     conn = db_open_contract_db ()
+    sde_conn = sql_sde_connect_to_db ()
     #db_check_contracts (conn, 'buy')
     db_check_contracts (conn, 'sell')
     #contract_id = input ("Enter in contract id: ")

@@ -16,14 +16,9 @@ from config import *
 cache = FileCache(path="/tmp")
 
 #FIXME 
-#Get's confused with BPCs, seems to be comparing it against BPOs
 #Adds in the value of rigs fitted to ships
 #Damaged crystals are unsellable but still counted in the valuation
-#Calculate cost of 'you will pay' items
-#Generate a report rather than opening the UI each time
-#db_add_contract will probably fail on items with a ' in the name like auggy drones
 #Some weird encoding problems
-#Can't get security information for structures, as I don't know what systems they are in.
 #rig group ids include blueprints atm
 
 
@@ -148,7 +143,7 @@ def create_appraisal (contract_items, is_included):
         print ("Creating appraisal list ")
     appraisal_text = ""
     for contract_item in contract_items:
-        # Seller is asking for item in return
+        # False if Seller is asking for item in return
         if contract_item['is_included'] is is_included:
             continue
         # Ignore BPCs for now
@@ -165,6 +160,7 @@ def create_appraisal (contract_items, is_included):
         appraisal_text += "\r\n"
         #FIXME Massive bodge because somewhere in the SDE there's a wrong backtick
         appraisal_text = appraisal_text.replace(u"\u2018", "'").replace(u"\u2019", "'")
+        appraisal_text = appraisal_text.replace(u"\u2013", "-")
     return appraisal_text
 
 def get_rig_groupids():
@@ -205,17 +201,9 @@ def get_contract_items (contract_id):
 
     return contract_items
 
-    #for contract_item in contract_items:
-    #    print (contract_item)
-    #    items.append (contract_item['type_id'])
-    #    check_contract_items (contract_item['type_id'])
-
 def check_if_expired (expiry_str):
     now = datetime.datetime.now(tz=pytz.utc)
     
-    #Convert string into datetime object
-    #2018-08-24T06:20:02Z
-
     expiry_unaware = datetime.datetime.strptime(expiry_str, '%Y-%m-%dT%H:%M:%SZ')
     expiry = pytz.utc.localize(expiry_unaware)
     
@@ -247,7 +235,7 @@ def get_contract (contract_id, contracts):
     exit (1)
 
 def get_contracts_for_region (region_id):
-    print ("Fetching public contracts for reqion: " + str(region_id))
+    print ("Fetching public contracts for reqion: " + get_name_from_region_id (db_sde, region_id))
     page = 1
     url = "https://esi.evetech.net/latest/contracts/public/" + str(region_id) + "/?datasource=tranquility&page=" + str(page)
     r = requests.get (url, headers=headers)
@@ -317,12 +305,9 @@ def check_region (region_id):
 
         #check_contract_items_for_fitted_rigs (contract_items)
         price = prices[contract_ids.index(contract_id)]
-        #FIXME Look to see if we have any other items in the contract to offset the price
         items = create_appraisal (contract_items, False)
         items_exchange = create_appraisal (contract_items, True)
 
-        #items = items.encode ('latin-1', 'ignore')
-        #items_exchange = items_exchange.encode ('latin-1', 'ignore')
         appraisal = fetch_appraisal (items)
         appraisal_exchange = fetch_appraisal (items_exchange)
         
@@ -330,7 +315,7 @@ def check_region (region_id):
             sell_exchange = appraisal_exchange['appraisal']['totals']['sell']
         except:
             sell_exchange = 0
-
+        
         if appraisal is None:
             if verbose:
                 print ("Nothing to appraise")
@@ -378,7 +363,6 @@ def check_region (region_id):
             priority = 0
         profit_buy = buy - price - sell_exchange
         profit_sell = sell - price - sell_exchange
-#def db_add_contract (contract_id, location_id, buy, sell, price, items_exchange_cost, items, items_exchange, security, expiry, priority, region_id):
         db_add_contract (contract_id, location_id, buy, sell, price, sell_exchange, items, items_exchange, \
                 security, expiry, priority, region_id, profit_buy, profit_sell, volume)
         if target > price:
@@ -387,8 +371,6 @@ def check_region (region_id):
             print ("Contract Price: " + format(price, ',.2f'))
             profit = target - price
             print ("Awooga Profit " + format(profit, ',.2f'))
-            #open_ui_for_contract (contract_id)
-            #input ()
 
 def main():
     global contracts
@@ -419,7 +401,7 @@ def main():
 
     do_security ()
     
-    rig_groupids = get_rig_groupids ()
+    #rig_groupids = get_rig_groupids ()
     for region_id in regions:
         check_region (region_id)
     print ("Exiting....")

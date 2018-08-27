@@ -68,7 +68,7 @@ def get_corp_blueprints ():
 def get_market_prices ():
     print ("Fetching latest market prices from ESI, like the adjusted ones because eeeeh")
     url = 'https://esi.evetech.net/latest/markets/prices/?datasource=tranquility'
-    r = requests.get (url)
+    r = requests.get (url, headers=headers)
     market_prices = r.json()
 
     #TODO Dump these prices into an SQLite db and work with them from there.
@@ -76,13 +76,13 @@ def get_market_prices ():
 def get_item_prices (materials):
     #print ("Fetching prices from EVEMarketer.com")
     url = 'https://api.evemarketer.com/ec/marketstat/json'
-    r = requests.post(url, data= {'typeid':materials, 'usesystem':system_id})
+    r = requests.post(url, data= {'typeid':materials, 'usesystem':system_id}, headers=headers)
     return r.json()
 
 def get_system_cost_index (man_system_id, activity):
     #print ("Fetching system cost index for " + str(man_system_id))
     url = "http://api.eve-industry.org/system-cost-index.xml?id=" + str(man_system_id)
-    r = requests.get (url)
+    r = requests.get (url, headers=headers)
     root = ET.fromstring (r.content)
     
     for element in root[0]:
@@ -95,7 +95,7 @@ def get_system_cost_index (man_system_id, activity):
 def get_job_base_cost (bpid):
     #print ("Calculating job base cost")
     url = 'https://api.eve-industry.org/job-base-cost.xml?ids=' + str(bpid)
-    r = requests.get (url)
+    r = requests.get (url, headers=headers)
     root = ET.fromstring (r.content)
 
     return float(root[0].text)
@@ -127,15 +127,16 @@ def get_manufacturing_price_for_item (conn, name, me, location):
 
     total = total + materials_total + jobfee
 
-    #print ("Materials total = {:,}".format(total))
-    print ("Materials total: %.2f" %materials_total)
-    print ("Job fee: %.2f" %jobfee)
-    print ("Total: %.2f" %total)
+    print ("Materials total: "  + format(materials_total, ',.2f'))
+    print ("Job fee: " + format(jobfee, ',.2f'))
+    print ("Total: " + format(total, ',.2f'))
     
     sell_price = get_item_prices (get_type_id_from_name(conn, name))
     sell_price = sell_price[0]['sell']['min']
-    print ("Sell price: %.2f" %sell_price)
-    print ("Profit: %.2f" %(sell_price - total))
+    print ("Sell price: " + format(sell_price,',.2f'))
+    profit = sell_price - total
+    print ("Profit: " + format(profit,',.2f'))
+
 
 def main():
     global conn

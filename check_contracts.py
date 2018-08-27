@@ -15,6 +15,16 @@ from config import *
 
 cache = FileCache(path="/tmp")
 
+def get_contract_authed (contract_id):
+    op = app.op['get_dev_contracts_public_items_contract_id'](contract_id=contract_id)
+    r = client.request(op)
+
+    if r.status != 200:
+e       print ("Couldn't fetch contract: error " + str(r.status))
+        return 0
+    print (r.data)
+    #return r.data['solar_system_id']
+
 def db_open_contract_db ():
     print ("Opening connection to contract database")
 
@@ -22,25 +32,24 @@ def db_open_contract_db ():
     conn = sqlite3.connect(db_contract_file)
     return conn
 
-def get_structure_solar_system_id (structure_id):
+def get_structure_information (structure_id):
     op = app.op['universe_structures_structure_id'](structure_id=structure_id)
     r = client.request(op)
 
     if r.status != 200:
         print ("distance: Couldn't get solar system for structure: error " + str(r.status))
-        return 0
-    print (r.data)
-    return r.data['solar_system_id']
+        return 0, 'Unknown'
+    return r.data['solar_system_id'], r.data['name']
 
 
-def get_station_solar_system_id (station_id):
+def get_station_information (station_id):
     op = app.op['universe_stations_station_id'](station_id=station_id)
     r = client.request(op)
 
     if r.status != 200:
         print ("distance: Couldn't get solar system for station: error " + str(r.status))
-        return 0
-    return r.data['system_id']
+        return 0, 'Unknown'
+    return r.data['system_id'],r.data['name']
 
 
 def distance_from_station (origin, destination):
@@ -69,20 +78,24 @@ def process_row (row):
     expiry = row[10]
     priority = row[11]
     region_id = row[12]
+    buy_profit = row[13]
+    sell_profit = rom[15]
+    volume = row[15]
     
     if security < float(min_security):
         print ("Ignoring contract due to low security")
         return
 
     if len(str(location_id)) == 8:
-        dest_system_id = get_station_solar_system_id (location_id)
+        location_info = get_station_information (location_id)
     else:
-        dest_system_id = get_structure_solar_system_id (location_id)
+        location_info = get_structure_information (location_id)
+        
+    dest_system_id = location_info[0]
+    location_name = location_info[1]
 
     distance = distance_from_station (system_id, dest_system_id)
     
-    if distance > 0:
-        distance = distance * 2
     #if priority == 0:
     #    print ("Not worth my time, mate")
     #    return
@@ -104,15 +117,15 @@ def process_row (row):
     else:
         print ("Security: Unknown")
     
-    print ("Region: " + str(get_region_from_region_id(sde_conn, region_id)))
+    print ("Location: " + location_name)
+    print ("Region: " + str(get_name_from_region_id(sde_conn, region_id)))
     if distance >= 0:
         print ("Jumps: " + str(distance))
+    print ("Volume: " + format(volume, ',.2f') +"m3")
     print ("Sell: " + format(sell, ',.2f'))
     print ("Buy: " + format(buy, ',.2f'))
     print ("Contract Price: " + format(price, ',.2f'))
 
-    buy_profit = buy - price
-    sell_profit = sell - price
     print ("Buy Profit: " + format(buy_profit, ',.2f'))
 
     print ("Sell Profit: " + format(sell_profit, ',.2f'))
@@ -121,11 +134,22 @@ def process_row (row):
         print ("Profit/Jump: " + format(sell_profit/distance, ',.2f'))
     open_ui_for_contract (contract_id)
     new_priority = input ("Enter in new priority: ")
-    if new_priority != "":
+    if new_priority.isdigit():
         update_contract_priority (contract_id, new_priority)
+    elif new_priority == "d":
+        delete_contract (contract_id)
+    elif new_priority == "g":
+        get_contract_authed (contract_id)
     elif new_priority == "q":
         exit ()
 
+
+def delete_contract (contract_id):
+    print ("Removing " + str(contract_id) + " form database")
+    sql = "DELETE FROM contracts WHERE contract_id = " + str(contract_id)
+    c = conn.cursor ()
+    c.execute (sql)
+    conn.commit()
 
 def update_contract_priority (contract_id, priority):
     sql = "UPDATE contracts SET priority = " + str(priority) + " WHERE contract_id = " + str(contract_id)
@@ -136,7 +160,7 @@ def update_contract_priority (contract_id, priority):
 def db_check_contracts (conn, order_type):
     #sql = "SELECT * FROM contracts WHERE " + order_type + " > price ORDER BY priority DESC"
     #sql = "SELECT * FROM contracts price ORDER BY priority DESC, profit_buy DESC"
-    sql = "SELECT * FROM contracts price ORDER BY profit_buy DESC"
+    sql = "SELECT * FROM contracts price ORDER BY priority DESC, profit_buy DESC"
     c = conn.cursor()
     c.execute(sql)
     rows = c.fetchall()
@@ -180,7 +204,7 @@ def do_security():
     print ("security: Authenticated for " + str(api_info['Scopes']))
 
 def open_ui_for_contract (contract_id):
-    print ("ui: Opening UI for item_id " + str(contract_id))
+    #print ("ui: Opening UI for item_id " + str(contract_id))
     op = app.op['post_ui_openwindow_contract'](contract_id=contract_id)
     ui = client.request(op)
 
@@ -191,7 +215,7 @@ def main():
     global sde_conn
     global min_security
     do_security ()
-    #open_ui_for_contract (135163291)
+    #open_ui_for_contract (136091970)
     #input()
     min_security = input ("Minimum security: ")
     if min_security == "":

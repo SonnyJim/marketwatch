@@ -38,7 +38,7 @@ def get_group_id_from_type_id (conn, type_id):
 
     return r
 
-def get_region_from_region_id (conn, region_id):
+def get_name_from_region_id (conn, region_id):
     if region_id == None:
         print ("sql_sde: No region_id specified")
         return "Error"

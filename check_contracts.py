@@ -13,17 +13,13 @@ from sql_sde import *
 
 from config import *
 
+from esi_helper import esi_get_station_information
+from esi_helper import esi_get_structure_information
+from esi_helper import esiChar
+from esi_helper import esi_distance_from_station
+from esi_helper import esi_open_ui_for_contract
+
 cache = FileCache(path="/tmp")
-
-def get_contract_authed (contract_id):
-    op = app.op['get_dev_contracts_public_items_contract_id'](contract_id=contract_id)
-    r = client.request(op)
-
-    if r.status != 200:
-e       print ("Couldn't fetch contract: error " + str(r.status))
-        return 0
-    print (r.data)
-    #return r.data['solar_system_id']
 
 def db_open_contract_db ():
     print ("Opening connection to contract database")
@@ -79,22 +75,26 @@ def process_row (row):
     priority = row[11]
     region_id = row[12]
     buy_profit = row[13]
-    sell_profit = rom[15]
+    sell_profit = row[14]
     volume = row[15]
     
     if security < float(min_security):
         print ("Ignoring contract due to low security")
         return
+    
+    if volume > float(max_volume) and max_volume != 0:
+        print ("Ignoring contract to do max volume")
+        return
 
     if len(str(location_id)) == 8:
-        location_info = get_station_information (location_id)
+        location_info = esi_get_station_information (location_id, char)
     else:
-        location_info = get_structure_information (location_id)
+        location_info = esi_get_structure_information (location_id, char)
         
-    dest_system_id = location_info[0]
-    location_name = location_info[1]
+    dest_system_id = location_info['solar_system_id']
+    location_name = location_info['name']
 
-    distance = distance_from_station (system_id, dest_system_id)
+    distance = esi_distance_from_station (system_id, dest_system_id, "secure", char)
     
     #if priority == 0:
     #    print ("Not worth my time, mate")
@@ -117,8 +117,8 @@ def process_row (row):
     else:
         print ("Security: Unknown")
     
-    print ("Location: " + location_name)
-    print ("Region: " + str(get_name_from_region_id(sde_conn, region_id)))
+    print ("Location: " + location_name + " (" +str(location_id)+")")
+    print ("Region: " + str(get_name_from_region_id(sde_conn, region_id)) + "(" + str(region_id) + ")")
     if distance >= 0:
         print ("Jumps: " + str(distance))
     print ("Volume: " + format(volume, ',.2f') +"m3")
@@ -132,7 +132,7 @@ def process_row (row):
     
     if distance >= 0:
         print ("Profit/Jump: " + format(sell_profit/distance, ',.2f'))
-    open_ui_for_contract (contract_id)
+    esi_open_ui_for_contract (contract_id, char)
     new_priority = input ("Enter in new priority: ")
     if new_priority.isdigit():
         update_contract_priority (contract_id, new_priority)
@@ -214,12 +214,19 @@ def main():
     global conn
     global sde_conn
     global min_security
-    do_security ()
-    #open_ui_for_contract (136091970)
-    #input()
+    global max_volume
+    global char
+    #do_security ()
+    char = esiChar("tokens.txt")
     min_security = input ("Minimum security: ")
     if min_security == "":
         min_security = -2
+    max_volume = input ("Max volume: ")
+    if max_volume == "":
+        max_volume = 0
+
+
+
     conn = db_open_contract_db ()
     sde_conn = sql_sde_connect_to_db ()
     #db_check_contracts (conn, 'buy')

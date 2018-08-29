@@ -15,11 +15,15 @@ from config import *
 
 cache = FileCache(path="/tmp")
 
+from esi_helper import esiChar
+from esi_helper import esi_get_structure_information
+
 #FIXME 
 #Adds in the value of rigs fitted to ships
 #Damaged crystals are unsellable but still counted in the valuation
 #Some weird encoding problems
 #rig group ids include blueprints atm
+#Log contract_ids we couldn't complete for further inspection
 
 
 def db_open_contract_db ():
@@ -34,7 +38,7 @@ def db_open_contract_db ():
         location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items_exchange_cost FLOAT, items VARCHAR(8192), \
         items_exchange VARCHAR(8192), security FLOAT, \
         expiry CHAR(128), priority INTEGER, region_id INTEGER, \
-        profit_buy FLOAT, profit_sell FLOAT, volume INTEGER \
+        profit_buy FLOAT, profit_sell FLOAT, volume INTEGER, items_typeids TEXT, items_exchange_typeids TEXT \
         )" 
     c.execute(sql)
     conn.commit ()
@@ -49,7 +53,7 @@ def db_add_contract (contract_id, location_id, buy, sell, price, items_exchange_
 
     c = db_contract.cursor()
     try:
-        args = (contract_id, "TRUE", location_id, buy, sell, price, items_exchange_cost, items, \
+        args = (contract_id, "FALSE", location_id, buy, sell, price, items_exchange_cost, items, \
                 items_exchange, security, expiry, priority, region_id, profit_buy, profit_sell, volume)
         c.execute('INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items_exchange_cost, items, \
                 items_exchange, security, expiry, priority, region_id, profit_buy, profit_sell, volume) \
@@ -110,10 +114,10 @@ def do_security():
     api_info = security.verify()
     print ("security: Authenticated for " + str(api_info['Scopes']))
 
-def open_ui_for_contract (contract_id):
-    print ("ui: Opening UI for item_id " + str(contract_id))
-    op = app.op['post_ui_openwindow_contract'](contract_id=contract_id)
-    ui = client.request(op)
+#def open_ui_for_contract (contract_id):
+#    print ("ui: Opening UI for item_id " + str(contract_id))
+#    op = app.op['post_ui_openwindow_contract'](contract_id=contract_id)
+#    ui = client.request(op)
 
 def fetch_appraisal (text):
     if len(text) == 0:
@@ -182,25 +186,6 @@ def check_contract_items_for_fitted_rigs (contract_items):
             print ("It's record id is " + str(item['record_id']))
             #input ()
 
-def get_contract_items (contract_id):
-    if verbose:
-        print ("Getting items for contract_id: " + str(contract_id))
-    items = []
-    url = "https://esi.evetech.net/latest/contracts/public/items/" + str(contract_id) + "/?datasource=tranquility&page=1"
-    r = requests.get (url, headers=headers)
-    if r.status_code != 200:
-        print ("get_contract_items: Error " + str(r.status_code))
-        return
-        #exit (1)
-    
-    if int(r.headers['X-Pages']) > 1:
-        print ("Found more than one page of results, we should be looping right now")
-        exit (1)
-
-    contract_items = json.loads(r.text)
-
-    return contract_items
-
 def check_if_expired (expiry_str):
     now = datetime.datetime.now(tz=pytz.utc)
     
@@ -234,21 +219,56 @@ def get_contract (contract_id, contracts):
     print ("get_contract: Error could not find contract_id: " + str(contract_id))
     exit (1)
 
+def get_contract_items (contract_id):
+    if verbose:
+        print ("Getting items for contract_id: " + str(contract_id))
+    items = []
+    page = 0
+    fetched_all_pages = False
+    
+    while not fetched_all_pages:
+        page +=1
+        url = "https://esi.evetech.net/latest/contracts/public/items/" + str(contract_id) + "/?datasource=tranquility&page=" + str(page)
+        r = requests.get (url, headers=headers)
+        if r.status_code != 200:
+            print ("get_contract_items: Error " + str(r.status_code))
+            return
+        if page is 1:
+            contract_items = json.loads(r.text)
+        else:
+            new_page = json.loads(r.text)
+            contract_items += new_page
+        if int(r.headers['X-Pages']) <= page:
+            fetched_all_pages = True
+
+    contract_items = json.loads(r.text)
+
+    return contract_items
+
+
 def get_contracts_for_region (region_id):
     print ("Fetching public contracts for reqion: " + get_name_from_region_id (db_sde, region_id))
-    page = 1
-    url = "https://esi.evetech.net/latest/contracts/public/" + str(region_id) + "/?datasource=tranquility&page=" + str(page)
-    r = requests.get (url, headers=headers)
-    if r.status_code != 200:
-        print ("get_contracts_for_region: Error " + str(r.status_code))
-        exit (1)
 
-    if int(r.headers['X-Pages']) > 1:
-        print ("Found more than one page of results, we should be looping right now")
-        exit (1)
+    page = 0
+    fetched_all_pages = False
 
+    while not fetched_all_pages:
+        page += 1
+        print ("Fetching page " + str(page))
+        url = "https://esi.evetech.net/latest/contracts/public/" + str(region_id) + "/?datasource=tranquility&page=" + str(page)
+        r = requests.get (url, headers=headers)
+        if r.status_code != 200:
+            print ("get_contracts_for_region: Error " + str(r.status_code))
+            exit (1)
+        
+        if page is 1:
+            contracts = json.loads(r.text)
+        else:
+            new_page = json.loads(r.text)
+            contracts += new_page
+        if int(r.headers['X-Pages']) <= page:
+            fetched_all_pages = True
 
-    contracts = json.loads(r.text)
     return contracts
 
 def get_contract_location (contract_id, contracts):
@@ -281,7 +301,7 @@ def check_region (region_id):
         if verbose:
             print ("")
             print (stars)
-        print (label)
+            print (label)
         if verbose:
             print (stars)
         
@@ -319,7 +339,7 @@ def check_region (region_id):
         if appraisal is None:
             if verbose:
                 print ("Nothing to appraise")
-            db_add_contract (contract_id, 0, 0, 0, 0, 0, "BLUEPRINT COPIES", "BLUEPRINT COPIES", 2, expiry, -1, region_id, 0, 0, 0)
+            db_add_contract (contract_id, 0, 0, 0, 0, 0, items, "BLUEPRINT COPIES", 2, expiry, -1, region_id, 0, 0, 0)
             continue
         try:
             buy = appraisal['appraisal']['totals']['buy']
@@ -336,8 +356,10 @@ def check_region (region_id):
             if len(str(location_id)) == 8:
                 security = get_station_security (db_sde, location_id)
             else:
-                print ("Can't get security information for structure_id's right now")
-                security = 2
+                info = esi_get_structure_information (location_id, char)
+                system_id = info['solar_system_id']
+                security = get_system_security (db_sde, system_id)
+
         except:
             print ("Error fetching security for location " + str(location_id))
             security = 2
@@ -365,7 +387,8 @@ def check_region (region_id):
         profit_sell = sell - price - sell_exchange
         db_add_contract (contract_id, location_id, buy, sell, price, sell_exchange, items, items_exchange, \
                 security, expiry, priority, region_id, profit_buy, profit_sell, volume)
-        if target > price:
+        if priority > 0:
+            print ("Contract ID: " + str(contract_id))
             print ("Sell: " + format(sell, ',.2f'))
             print ("Buy: " + format(buy, ',.2f'))
             print ("Contract Price: " + format(price, ',.2f'))
@@ -378,6 +401,7 @@ def main():
     global db_contract
     global verbose
     global rig_groupids
+    global char # Class that holds all the security gubbins for ESI
 
     print ("Startin' muta watch")
     print ("10000067 Genesis")
@@ -395,11 +419,13 @@ def main():
     print ("10000064 Essence")
     
     regions = (10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
-    verbose = True
+    #regions = (10000042, )
+    verbose = False
     db_sde = sql_sde_connect_to_db ()
     db_contract = db_open_contract_db ()
-
-    do_security ()
+    
+    char = esiChar("tokens.txt") #Currently only used to get structure solarsystem
+    #do_security ()
     
     #rig_groupids = get_rig_groupids ()
     for region_id in regions:

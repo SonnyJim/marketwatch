@@ -23,44 +23,10 @@ cache = FileCache(path="/tmp")
 
 def db_open_contract_db ():
     print ("Opening connection to contract database")
-
     db_contract_file = "./contracts.db"
     conn = sqlite3.connect(db_contract_file)
     return conn
 
-def get_structure_information (structure_id):
-    op = app.op['universe_structures_structure_id'](structure_id=structure_id)
-    r = client.request(op)
-
-    if r.status != 200:
-        print ("distance: Couldn't get solar system for structure: error " + str(r.status))
-        return 0, 'Unknown'
-    return r.data['solar_system_id'], r.data['name']
-
-
-def get_station_information (station_id):
-    op = app.op['universe_stations_station_id'](station_id=station_id)
-    r = client.request(op)
-
-    if r.status != 200:
-        print ("distance: Couldn't get solar system for station: error " + str(r.status))
-        return 0, 'Unknown'
-    return r.data['system_id'],r.data['name']
-
-
-def distance_from_station (origin, destination):
-    #print ("distance: Calculating route from " + str(origin) + " to " + str(destination))
-    op = app.op['get_route_origin_destination'](origin=origin, destination=destination)
-    r = client.request(op)
-
-    if r.status != 200:
-        print ("distance: Couldn't get distance from station: error " + str(r.status))
-        return -1
-    distance = len(r.data)
-    return distance
-
-
-#db_add_contract (contract_id, location_id, buy, sell, price, sell_exchange, items, items_exchange, security, expiry, priority, region_id)
 def process_row (row):
     contract_id = row[0]
     location_id = row[2]
@@ -77,22 +43,30 @@ def process_row (row):
     buy_profit = row[13]
     sell_profit = row[14]
     volume = row[15]
+    dest_system_id = row[16]
     
     if security < float(min_security):
         print ("Ignoring contract due to low security")
         return
     
     if volume > float(max_volume) and max_volume != 0:
-        print ("Ignoring contract to do max volume")
+        print ("Ignoring contract due to max volume")
         return
-
-    if len(str(location_id)) == 8:
-        location_info = esi_get_station_information (location_id, char)
-    else:
-        location_info = esi_get_structure_information (location_id, char)
-        
-    dest_system_id = location_info['solar_system_id']
-    location_name = location_info['name']
+    
+    if dest_system_id is "" or dest_system_id is 0 or dest_system_id is None: 
+        if len(str(location_id)) == 8:
+            dest_system_id = get_station_system(sde_conn, location_id)
+            location_name = get_station_name(sde_conn, location_id)
+        else:
+            location_info = esi_get_structure_information (location_id, char)
+            if location_info is not None:
+                dest_system_id = location_info['solar_system_id']
+                location_name = location_info['name']
+            else:
+                location_name = 'Forbidden'
+                dest_system_id = 0
+    
+    update_contract_system (contract_id, dest_system_id)
 
     distance = esi_distance_from_station (system_id, dest_system_id, "secure", char)
     
@@ -119,6 +93,7 @@ def process_row (row):
     
     print ("Location: " + location_name + " (" +str(location_id)+")")
     print ("Region: " + str(get_name_from_region_id(sde_conn, region_id)) + "(" + str(region_id) + ")")
+    print ("System: " + str(dest_system_id))
     if distance >= 0:
         print ("Jumps: " + str(distance))
     print ("Volume: " + format(volume, ',.2f') +"m3")
@@ -157,81 +132,40 @@ def update_contract_priority (contract_id, priority):
     c.execute (sql)
     conn.commit()
 
-def db_check_contracts (conn, order_type):
-    #sql = "SELECT * FROM contracts WHERE " + order_type + " > price ORDER BY priority DESC"
-    #sql = "SELECT * FROM contracts price ORDER BY priority DESC, profit_buy DESC"
-    sql = "SELECT * FROM contracts price ORDER BY priority DESC, profit_buy DESC"
+def update_contract_system (contract_id, system_id):
+    sql = "UPDATE contracts SET system_id = " + str(system_id) + " WHERE contract_id = " + str(contract_id)
+    c = conn.cursor ()
+    c.execute (sql)
+    conn.commit()
+
+def db_check_contracts (conn, min_security, max_volume):
+    sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY priority DESC, profit_buy DESC"
+    #sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY profit_sell DESC"
     c = conn.cursor()
     c.execute(sql)
     rows = c.fetchall()
     for row in rows:
         process_row (row)
 
-def do_security():
-    global client
-    global app
-    print ("security: Authenticating")
-
-    #Retrieve the tokens from the film
-    with open("tokens.txt", "rb") as fp:
-        tokens_file = pickle.load(fp)
-    fp.close()
-
-    esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
-    app = esi_app.get_latest_swagger
-
-    security = EsiSecurity(
-            redirect_uri=redirect_uri,
-            client_id=client_id,
-            secret_key=secret_key,
-            headers=headers
-            )
-
-    client = EsiClient(
-            retry_requests=True,
-            headers=headers,
-            security=security
-            )
-
-    security.update_token({
-        'access_token': '',
-        'expires_in': -1,
-        'refresh_token': tokens_file['refresh_token']
-        })
-
-    tokens = security.refresh()
-    api_info = security.verify()
-    print ("security: Authenticated for " + str(api_info['Scopes']))
-
-def open_ui_for_contract (contract_id):
-    #print ("ui: Opening UI for item_id " + str(contract_id))
-    op = app.op['post_ui_openwindow_contract'](contract_id=contract_id)
-    ui = client.request(op)
-
-    #if (ui.status_code != 204):
-    #    print ("ui: Error opening window: error "+ str(ui.status_code))
 def main():
     global conn
     global sde_conn
     global min_security
     global max_volume
     global char
-    #do_security ()
     char = esiChar("tokens.txt")
     min_security = input ("Minimum security: ")
     if min_security == "":
-        min_security = -2
+        min_security = -1
     max_volume = input ("Max volume: ")
     if max_volume == "":
-        max_volume = 0
+        max_volume = 999999999999
 
 
 
     conn = db_open_contract_db ()
     sde_conn = sql_sde_connect_to_db ()
-    #db_check_contracts (conn, 'buy')
-    db_check_contracts (conn, 'sell')
-    #contract_id = input ("Enter in contract id: ")
+    db_check_contracts (conn, min_security, max_volume)
     print ("Exiting....")
 
     

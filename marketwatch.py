@@ -15,9 +15,41 @@ from email.message import EmailMessage
 from time import sleep
 from config import *
 
-#FIXME Need to look at the range from the station for the buy orders
-
 cache = FileCache(path="/tmp")
+
+class Char:
+    def __init__(self, token_file):
+        #Retrieve the tokens from the file
+        with open(token_file, "rb") as fp:
+            tokens_file = pickle.load(fp)
+        fp.close()
+
+        esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
+        self.app = esi_app.get_latest_swagger
+
+        self.security = EsiSecurity(
+                redirect_uri=redirect_uri,
+                client_id=client_id,
+                secret_key=secret_key,
+                headers=headers
+                )
+
+        self.client = EsiClient(
+                retry_requests=True,
+                headers=headers,
+                security=self.security
+                )
+
+        self.security.update_token({
+            'access_token': '',
+            'expires_in': -1,
+            'refresh_token': tokens_file['refresh_token']
+            })
+
+        tokens = self.security.refresh()
+        api_info = self.security.verify()
+        print ("security: Authenticated for " + str(api_info['Scopes']))
+
 
 def distance_from_station (origin, destination):
     #print ("distance: Calculating route from " + str(origin) + " to " + str(destination))
@@ -244,40 +276,8 @@ def do_security():
     global industry_char, mail_char
 
     industry_char = Char("tokens.txt")
-    mail_char = Char("tokens_mail.txt")
-
-class Char:
-    def __init__(self, token_file):
-        #Retrieve the tokens from the file
-        with open(token_file, "rb") as fp:
-            tokens_file = pickle.load(fp)
-        fp.close()
-
-        esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
-        self.app = esi_app.get_latest_swagger
-
-        self.security = EsiSecurity(
-                redirect_uri=redirect_uri,
-                client_id=client_id,
-                secret_key=secret_key,
-                headers=headers
-                )
-
-        self.client = EsiClient(
-                retry_requests=True,
-                headers=headers,
-                security=self.security
-                )
-
-        self.security.update_token({
-            'access_token': '',
-            'expires_in': -1,
-            'refresh_token': tokens_file['refresh_token']
-            })
-
-        tokens = self.security.refresh()
-        api_info = self.security.verify()
-        print ("security: Authenticated for " + str(api_info['Scopes']))
+    if notify_by_evemail:
+        mail_char = Char("tokens_mail.txt")
 
 def main():
     print ("Startin' Marketwatch")

@@ -11,6 +11,32 @@ def sql_sde_connect_to_db():
         print ("sql_sde: Error opening database: " +str(sde_file))
     return conn
 
+def get_system_security (conn, system_id):
+    c = conn.cursor()
+    s = (system_id,)
+    c.execute('select security from mapSolarSystems where solarSystemID is ?', s)
+    r = c.fetchone()
+
+    return r
+
+def get_station_name (conn, station_id):
+
+    c = conn.cursor()
+    s = (station_id,)
+    c.execute('select stationName from staStations where stationID is ?', s)
+    r = c.fetchone()
+
+    return r
+
+def get_station_system (conn, station_id):
+
+    c = conn.cursor()
+    s = (station_id,)
+    c.execute('select solarSystemID from staStations where stationID is ?', s)
+    r = c.fetchone()
+
+    return r
+
 def get_station_security (conn, station_id):
 
     c = conn.cursor()

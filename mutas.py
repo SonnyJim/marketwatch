@@ -9,6 +9,7 @@ import requests
 import json
 import datetime
 import pytz
+import logging
 from sql_sde import *
 
 from config import *
@@ -17,6 +18,9 @@ cache = FileCache(path="/tmp")
 
 from esi_helper import esiChar
 from esi_helper import esi_get_structure_information
+from esi_helper import esi_get_status
+
+from time import sleep
 
 #FIXME 
 #Adds in the value of rigs fitted to ships
@@ -24,6 +28,7 @@ from esi_helper import esi_get_structure_information
 #Some weird encoding problems
 #rig group ids include blueprints atm
 #Log contract_ids we couldn't complete for further inspection
+#Increase speed by dumping all the contract_ids from the database in one call?
 
 
 def db_open_contract_db ():
@@ -38,7 +43,7 @@ def db_open_contract_db ():
         location_id INTEGER, buy FLOAT, sell FLOAT, price FLOAT, items_exchange_cost FLOAT, items VARCHAR(8192), \
         items_exchange VARCHAR(8192), security FLOAT, \
         expiry CHAR(128), priority INTEGER, region_id INTEGER, \
-        profit_buy FLOAT, profit_sell FLOAT, volume INTEGER, items_typeids TEXT, items_exchange_typeids TEXT \
+        profit_buy FLOAT, profit_sell FLOAT, volume INTEGER, items_typeids TEXT, items_exchange_typeids TEXT, system_id INT, distance INT \
         )" 
     c.execute(sql)
     conn.commit ()
@@ -47,23 +52,35 @@ def db_open_contract_db ():
 
 def db_add_contract (contract_id, location_id, buy, sell, price, items_exchange_cost, \
         items, items_exchange, security, expiry, priority, region_id, \
-        profit_buy, profit_sell, volume):
+        profit_buy, profit_sell, volume, system_id):
     if verbose:
         print ("Adding contract id " + str(contract_id) + " to database")
 
     c = db_contract.cursor()
     try:
         args = (contract_id, "FALSE", location_id, buy, sell, price, items_exchange_cost, items, \
-                items_exchange, security, expiry, priority, region_id, profit_buy, profit_sell, volume)
+                items_exchange, security, expiry, priority, region_id, profit_buy, profit_sell, volume, system_id)
         c.execute('INSERT INTO contracts (contract_id, checked, location_id, buy, sell, price, items_exchange_cost, items, \
-                items_exchange, security, expiry, priority, region_id, profit_buy, profit_sell, volume) \
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', args)
+                items_exchange, security, expiry, priority, region_id, profit_buy, profit_sell, volume, system_id) \
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', args)
     except sqlite3.IntegrityError:
         print('Error: ID already exists in PRIMARY KEY column {}'.format(id_column))
     except sqlite3.OperationalError as e:
                     print('[-] Sqlite operational error: {}'.format(e))
                     exit ()
     db_contract.commit()
+
+def db_get_contract_ids (region_id):
+    if verbose:
+        print ("Fetching the list of already checked contract ids from the database")
+
+    sql = "SELECT contract_id FROM contracts WHERE region_id is " + str(region_id)
+    db_contract.row_factory = lambda cursor, row: row[0]
+    c = db_contract.cursor()
+    c.execute(sql)
+    r = c.fetchall()
+    db_contract.row_factory = lambda cursor, row: row
+    return r
 
 def db_check_contract (contract_id):
     if verbose:
@@ -78,48 +95,7 @@ def db_check_contract (contract_id):
     else:
         return True
 
-def do_security():
-    global client
-    global app
-    print ("security: Authenticating")
-
-    #Retrieve the tokens from the film
-    with open("tokens.txt", "rb") as fp:
-        tokens_file = pickle.load(fp)
-    fp.close()
-
-    esi_app = EsiApp(cache=cache, cache_time=0, headers=headers)
-    app = esi_app.get_latest_swagger
-
-    security = EsiSecurity(
-            redirect_uri=redirect_uri,
-            client_id=client_id,
-            secret_key=secret_key,
-            headers=headers
-            )
-
-    client = EsiClient(
-            retry_requests=True,
-            headers=headers,
-            security=security
-            )
-
-    security.update_token({
-        'access_token': '',
-        'expires_in': -1,
-        'refresh_token': tokens_file['refresh_token']
-        })
-
-    tokens = security.refresh()
-    api_info = security.verify()
-    print ("security: Authenticated for " + str(api_info['Scopes']))
-
-#def open_ui_for_contract (contract_id):
-#    print ("ui: Opening UI for item_id " + str(contract_id))
-#    op = app.op['post_ui_openwindow_contract'](contract_id=contract_id)
-#    ui = client.request(op)
-
-def fetch_appraisal (text):
+def fetch_appraisal (text, items):
     if len(text) == 0:
         if verbose:
             print ("Error:  appraisal text empty")
@@ -136,8 +112,9 @@ def fetch_appraisal (text):
     
     if r.status_code !=200:
         print ("Error fetching appraisal: " + str(r.status_code))
-        print (url)
+        return -1
         #FIXME Log error
+        #Probably want to return None then check on the other end
 
     appraisal = json.loads(r.text)
     return appraisal
@@ -293,19 +270,23 @@ def check_region (region_id):
     prices = contract_ids[1]
     contract_ids = contract_ids[0]
     contracts_checked = 0
+    region_contract_ids = db_get_contract_ids (region_id)
     for contract_id in contract_ids:
         contracts_checked += 1
-        
+            
         label = (str(contracts_checked) + "/" + str(contract_count) + " Contract ID: " + str(contract_id))
+
         stars = make_stars (len(label))
         if verbose:
             print ("")
             print (stars)
             print (label)
-        if verbose:
             print (stars)
+        elif contracts_checked % 10 == 0:
+            print (label)
         
-        if db_check_contract (contract_id) is True:
+        #if db_check_contract (contract_id) is True:
+        if contract_id in region_contract_ids:
             if verbose:
                 print ("Contract ID " + str(contract_id) + " is already in the database")
             continue
@@ -325,26 +306,36 @@ def check_region (region_id):
 
         #check_contract_items_for_fitted_rigs (contract_items)
         price = prices[contract_ids.index(contract_id)]
+        # Fetch the text names for the items and split them up into items and items wanted in exchange
         items = create_appraisal (contract_items, False)
         items_exchange = create_appraisal (contract_items, True)
 
-        appraisal = fetch_appraisal (items)
-        appraisal_exchange = fetch_appraisal (items_exchange)
-        
-        try:
-            sell_exchange = appraisal_exchange['appraisal']['totals']['sell']
-        except:
-            sell_exchange = 0
+        appraisal = fetch_appraisal (items, contract_items)
+        appraisal_exchange = fetch_appraisal (items_exchange, contract_items)
         
         if appraisal is None:
             if verbose:
                 print ("Nothing to appraise")
-            db_add_contract (contract_id, 0, 0, 0, 0, 0, items, "BLUEPRINT COPIES", 2, expiry, -1, region_id, 0, 0, 0)
+            db_add_contract (contract_id, 0, 0, 0, 0, 0, items, "BLUEPRINT COPIES", 2, expiry, -1, region_id, 0, 0, 0,0)
             continue
+
+        if appraisal is -1 or appraisal_exchange is -1:
+            logging.warning ("Couldn't create the appraisal for contract " + str(contract_id))
+            continue
+        
+        try:
+            sell_exchange = appraisal_exchange['appraisal']['totals']['sell']
+        except:
+            logging.warning ("Couldn't get the appraisal totals for contract " + str(contract_id))
+            sell_exchange = 0
+        
+
+
         try:
             buy = appraisal['appraisal']['totals']['buy']
             sell = appraisal['appraisal']['totals']['sell']
         except:
+            logging.warning ("Couldn't get the appraisal totals for contract " + str(contract_id))
             buy = 0
             sell = 0
 
@@ -355,14 +346,17 @@ def check_region (region_id):
         try:
             if len(str(location_id)) == 8:
                 security = get_station_security (db_sde, location_id)
+                system_id = get_station_system (db_sde, location_id)
             else:
                 info = esi_get_structure_information (location_id, char)
                 system_id = info['solar_system_id']
                 security = get_system_security (db_sde, system_id)
 
         except:
-            print ("Error fetching security for location " + str(location_id))
-            security = 2
+            error = "Error fetching security for location " + str(location_id)
+            print (error)
+            logging.warning (error)
+            continue
 
         if verbose:
             print ("Sell: " + format(sell, ',.2f'))
@@ -386,7 +380,7 @@ def check_region (region_id):
         profit_buy = buy - price - sell_exchange
         profit_sell = sell - price - sell_exchange
         db_add_contract (contract_id, location_id, buy, sell, price, sell_exchange, items, items_exchange, \
-                security, expiry, priority, region_id, profit_buy, profit_sell, volume)
+                security, expiry, priority, region_id, profit_buy, profit_sell, volume, system_id)
         if priority > 0:
             print ("Contract ID: " + str(contract_id))
             print ("Sell: " + format(sell, ',.2f'))
@@ -404,6 +398,7 @@ def main():
     global char # Class that holds all the security gubbins for ESI
 
     print ("Startin' muta watch")
+    print ("10000016 Lonetrek")
     print ("10000067 Genesis")
     print ("10000065 Kor-Azor")
     print ("10000020 Tash-Murkon")
@@ -418,18 +413,22 @@ def main():
     print ("10000043 Domain")
     print ("10000064 Essence")
     
-    regions = (10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
-    #regions = (10000042, )
+    regions = (10000016, 10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
     verbose = False
     db_sde = sql_sde_connect_to_db ()
     db_contract = db_open_contract_db ()
     
+    logging.basicConfig(filename='logMutas.log',level=logging.WARNING)
     char = esiChar("tokens.txt") #Currently only used to get structure solarsystem
-    #do_security ()
     
     #rig_groupids = get_rig_groupids ()
-    for region_id in regions:
-        check_region (region_id)
+    while esi_get_status () != True:
+        print ("ESI unavailable")
+        sleep (30)
+
+    while (1):
+        for region_id in regions:
+            check_region (region_id)
     print ("Exiting....")
 
     

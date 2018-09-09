@@ -60,13 +60,13 @@ def esi_get_structure_information (structure_id, char):
 
     if r.status != 200:
         print ("distance: Couldn't get solar system for structure: error " + str(r.status))
-        return None
+        return -1
     return r.data
 
 
 def esi_get_station_information (station_id, char):
-    op = app.op['universe_stations_station_id'](station_id=station_id)
-    r = client.request(op)
+    op = char.app.op['universe_stations_station_id'](station_id=station_id)
+    r = char.client.request(op)
 
     if r.status != 200:
         print ("distance: Couldn't get solar system for station: error " + str(r.status))
@@ -84,6 +84,16 @@ def esi_distance_from_station (origin, destination, flag, char):
 
     distance = len(r.data)
     return distance
+
+def esi_get_status ():
+    print ("Checking ESI status:")
+    url = "https://esi.evetech.net/latest/status/?datasource=tranquility"
+    r = requests.get (url)
+    print (r.status_code)
+    if r.status_code != 200:
+        return False
+    else:
+        return True
 
 def esi_get_name_from_id (type_id):
     url = "https://esi.evetech.net/latest/universe/names/?datasource=tranquility"

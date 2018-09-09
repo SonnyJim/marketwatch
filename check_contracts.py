@@ -120,7 +120,7 @@ def process_row (row):
 
 
 def delete_contract (contract_id):
-    print ("Removing " + str(contract_id) + " form database")
+    print ("Removing " + str(contract_id) + " from database")
     sql = "DELETE FROM contracts WHERE contract_id = " + str(contract_id)
     c = conn.cursor ()
     c.execute (sql)

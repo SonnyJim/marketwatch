@@ -28,7 +28,7 @@ from time import sleep
 #Some weird encoding problems
 #rig group ids include blueprints atm
 #Log contract_ids we couldn't complete for further inspection
-#Increase speed by dumping all the contract_ids from the database in one call?
+#Log 403 structures so we aren't wasting time checking them again
 
 
 def db_open_contract_db ():
@@ -47,6 +47,10 @@ def db_open_contract_db ():
         )" 
     c.execute(sql)
     conn.commit ()
+
+    sql = "CREATE TABLE IF NOT EXISTS locations (location_id INT, system_id INT, region_id INT, name TEXT, dockable BOOLEAN, distance INT)"
+    c.execute(sql)
+    conn.commit()
     return conn
 
 
@@ -95,6 +99,30 @@ def db_check_contract (contract_id):
     else:
         return True
 
+def get_structure_information (location_id):
+
+    sql = "SELECT security, system_id, dcckable FROM structures WHERE location_id IS " + str(location_id)
+    c = db_contract.cursor()
+    c.execute(sql)
+    r = c.fetchone()
+    if r == None:
+        info = esi_get_structure_information (location_id, char)
+        if info == -1:
+            #Structure is inaccesible?
+            security = -1
+            system_id = -1
+            dockable = False
+        else:
+            system_id = info['solar_system_id']
+            security = get_system_security (db_sde, system_id)
+            dockable = True
+        c.exe
+    elif r[3] is True:
+        security = r[0]
+        system_id = r[1]
+
+    return security,system_id
+        #Fetch it from the ESI
 def fetch_appraisal (text, items):
     if len(text) == 0:
         if verbose:
@@ -124,6 +152,11 @@ def create_appraisal (contract_items, is_included):
         print ("Creating appraisal list ")
     appraisal_text = ""
     for contract_item in contract_items:
+        #if 'raw_quantity' in contract_item:
+        #    if contract_item['raw_quantity'] == -1:
+        #        print ("Item is singleton, not including: " + str(contract_item))
+        #        continue
+
         # False if Seller is asking for item in return
         if contract_item['is_included'] is is_included:
             continue
@@ -145,7 +178,7 @@ def create_appraisal (contract_items, is_included):
     return appraisal_text
 
 def get_rig_groupids():
-    sql = "select groupID from invGroups where groupName like '%Rig %'"
+    sql = "select groupID from invGroups where groupName like '%Rig %' and groupName not like '%Structure%'"
     c = db_sde.cursor()
     c.execute(sql)
     r = c.fetchall()
@@ -155,6 +188,7 @@ def get_rig_groupids():
 def check_contract_items_for_fitted_rigs (contract_items):
     if verbose:
         print ("Checking contract items for fitted rigs")
+    contract_items_minus_rigs = []
     for item in contract_items:
         groupid = get_group_id_from_type_id (db_sde, item['type_id'])
         if groupid in rig_groupids:
@@ -162,6 +196,10 @@ def check_contract_items_for_fitted_rigs (contract_items):
             print ("item type " + str(item['type_id']) + " is a rig in group " + str(groupid))
             print ("It's record id is " + str(item['record_id']))
             #input ()
+        else:
+            contract_items_minus_rigs.append (item)
+
+    return contract_items_minus_rigs
 
 def check_if_expired (expiry_str):
     now = datetime.datetime.now(tz=pytz.utc)
@@ -236,7 +274,10 @@ def get_contracts_for_region (region_id):
         r = requests.get (url, headers=headers)
         if r.status_code != 200:
             print ("get_contracts_for_region: Error " + str(r.status_code))
-            exit (1)
+            if page == 1:
+                return -1
+            else:
+                return contracts
         
         if page is 1:
             contracts = json.loads(r.text)
@@ -264,6 +305,9 @@ def make_stars (length):
 
 def check_region (region_id):
     contracts = get_contracts_for_region (region_id)
+    if contracts == -1:
+        print ("Error fetching contracts for region, skipping")
+        return
     contract_ids = extract_contract_ids ("item_exchange", contracts)
     
     #Unpack the tuple - FIXME
@@ -271,24 +315,29 @@ def check_region (region_id):
     contract_ids = contract_ids[0]
     contracts_checked = 0
     region_contract_ids = db_get_contract_ids (region_id)
+
     for contract_id in contract_ids:
         contracts_checked += 1
             
         label = (str(contracts_checked) + "/" + str(contract_count) + " Contract ID: " + str(contract_id))
 
-        stars = make_stars (len(label))
         if verbose:
+            stars = make_stars (len(label))
             print ("")
             print (stars)
             print (label)
             print (stars)
-        elif contracts_checked % 10 == 0:
+        elif contracts_checked % 100 == 0:
             print (label)
         
-        #if db_check_contract (contract_id) is True:
+        #Check to see if we can skip the contract for whatever reason
         if contract_id in region_contract_ids:
             if verbose:
                 print ("Contract ID " + str(contract_id) + " is already in the database")
+            continue
+
+        if contract_id in broken_contracts:
+            print ("Contract is broken: " + str(contract_id))
             continue
 
         try: 
@@ -297,11 +346,21 @@ def check_region (region_id):
         except:
             expiry = "UNKNOWN"
         
+        location_id = contract['start_location_id']
+        if location_id in forbidden_structures:
+            print ("Skipping contract due to forbidden structure: " + str(location_id))
+            continue
+
+        #Start checking the items in the contract       
         volume = contract['volume']
         contract_items = get_contract_items (contract_id)
-        
+        #Strip out any items that are rigs
+        if dont_count_rigs:
+            contract_items = check_contract_items_for_fitted_rigs (contract_items)
+
         if contract_items == None:
             print ("Error:  Couldn't find any contract items")
+            broken_contracts.append (contract_id)
             continue
 
         #check_contract_items_for_fitted_rigs (contract_items)
@@ -321,6 +380,7 @@ def check_region (region_id):
 
         if appraisal is -1 or appraisal_exchange is -1:
             logging.warning ("Couldn't create the appraisal for contract " + str(contract_id))
+            broken_contracts.append (contract_id)
             continue
         
         try:
@@ -340,9 +400,7 @@ def check_region (region_id):
             sell = 0
 
         target = buy
-
-        location_id = contract['start_location_id']
-
+        
         try:
             if len(str(location_id)) == 8:
                 security = get_station_security (db_sde, location_id)
@@ -353,6 +411,7 @@ def check_region (region_id):
                 security = get_system_security (db_sde, system_id)
 
         except:
+            forbidden_structures.append (location_id)
             error = "Error fetching security for location " + str(location_id)
             print (error)
             logging.warning (error)
@@ -396,6 +455,8 @@ def main():
     global verbose
     global rig_groupids
     global char # Class that holds all the security gubbins for ESI
+    global forbidden_structures
+    global broken_contracts
 
     print ("Startin' muta watch")
     print ("10000016 Lonetrek")
@@ -413,15 +474,19 @@ def main():
     print ("10000043 Domain")
     print ("10000064 Essence")
     
+    forbidden_structures = []
+    broken_contracts = []
+
     regions = (10000016, 10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
     verbose = False
+    dont_count_rigs = True
     db_sde = sql_sde_connect_to_db ()
     db_contract = db_open_contract_db ()
     
     logging.basicConfig(filename='logMutas.log',level=logging.WARNING)
     char = esiChar("tokens.txt") #Currently only used to get structure solarsystem
     
-    #rig_groupids = get_rig_groupids ()
+    rig_groupids = get_rig_groupids ()
     while esi_get_status () != True:
         print ("ESI unavailable")
         sleep (30)

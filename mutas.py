@@ -26,9 +26,10 @@ from time import sleep
 #Adds in the value of rigs fitted to ships
 #Damaged crystals are unsellable but still counted in the valuation
 #Some weird encoding problems
-#rig group ids include blueprints atm
 #Log contract_ids we couldn't complete for further inspection
 #Log 403 structures so we aren't wasting time checking them again
+#Reduce the amount of calls when checking for rigs
+#Prune expired or completed contracts
 
 
 def db_open_contract_db ():
@@ -182,13 +183,34 @@ def get_rig_groupids():
     c = db_sde.cursor()
     c.execute(sql)
     r = c.fetchall()
+    print ("Ignoring group IDs: ")
     print (r)
     return r
-   
+ 
+def check_contract_items_for_marketable_items (contract_items):
+    if verbose:
+        print ("Checking contract items for stuff we can sell via the market")
+    
+    contract_items_minus_unmarketables = []
+
+    if contract_items is None:
+        return None
+    
+    for item in contract_items:
+        if check_if_type_id_is_marketable (db_sde, item['type_id']) is True:
+            contract_items_minus_unmarketables.append(item)
+        else:
+            print ("Item is not marketable: " + str(item))
+
+    return contract_items_minus_unmarketables
+
 def check_contract_items_for_fitted_rigs (contract_items):
     if verbose:
         print ("Checking contract items for fitted rigs")
     contract_items_minus_rigs = []
+    if contract_items is None:
+        return None
+
     for item in contract_items:
         groupid = get_group_id_from_type_id (db_sde, item['type_id'])
         if groupid in rig_groupids:
@@ -357,7 +379,8 @@ def check_region (region_id):
         #Strip out any items that are rigs
         if dont_count_rigs:
             contract_items = check_contract_items_for_fitted_rigs (contract_items)
-
+        #Strip out any items we can't sell via the market
+        contract_items = check_contract_items_for_marketable_items (contract_items)
         if contract_items == None:
             print ("Error:  Couldn't find any contract items")
             broken_contracts.append (contract_id)
@@ -454,11 +477,16 @@ def main():
     global db_contract
     global verbose
     global rig_groupids
+    global dont_count_rigs
     global char # Class that holds all the security gubbins for ESI
     global forbidden_structures
     global broken_contracts
 
     print ("Startin' muta watch")
+    print ("Searching regions:")
+    print ("10000052 Kador")
+    print ("10000069 Black Rise")
+    print ("10000068 Verge Vendor")
     print ("10000016 Lonetrek")
     print ("10000067 Genesis")
     print ("10000065 Kor-Azor")
@@ -477,7 +505,7 @@ def main():
     forbidden_structures = []
     broken_contracts = []
 
-    regions = (10000016, 10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
+    regions = (10000052, 10000069, 10000068, 10000016, 10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
     verbose = False
     dont_count_rigs = True
     db_sde = sql_sde_connect_to_db ()

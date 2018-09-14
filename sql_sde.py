@@ -118,7 +118,6 @@ def get_type_id_from_name (conn, name):
 
     return int(r)
 
-
 def get_bpid_for_name (conn, name):
     return get_type_id_from_name(conn, str(name) + " Blueprint")
 
@@ -141,3 +140,14 @@ def get_materials_for_bp (conn, type_id):
         return "Error"
 
     return r
+
+def check_if_type_id_is_marketable (conn, type_id):
+    c = conn.cursor()
+    t = (type_id,)
+    c.execute('SELECT marketGroupID FROM invTypes WHERE typeID IS ?', t)
+    r = c.fetchone()
+
+    if r is None:
+        return False
+    else:
+        return True

@@ -45,6 +45,7 @@ def process_row (row):
     volume = row[15]
     dest_system_id = row[16]
     
+    print ("Checking contract " + str(contract_id))
     if security < float(min_security):
         print ("Ignoring contract due to low security")
         return
@@ -110,13 +111,22 @@ def process_row (row):
     esi_open_ui_for_contract (contract_id, char)
     new_priority = input ("Enter in new priority: ")
     if new_priority.isdigit():
-        update_contract_priority (contract_id, new_priority)
+        if int(new_priority) <= 5 and int(new_priority) >= 0:
+            update_contract_priority (contract_id, new_priority)
+        else:
+            print ("Didn't recognise new priority: " + str(new_priority))
     elif new_priority == "d":
         delete_contract (contract_id)
     elif new_priority == "g":
         get_contract_authed (contract_id)
     elif new_priority == "q":
-        exit ()
+        exit()
+    elif new_priority == "r":
+        print ("Restarting")
+        return -1
+
+    return 0
+
 
 
 def delete_contract (contract_id):
@@ -139,13 +149,16 @@ def update_contract_system (contract_id, system_id):
     conn.commit()
 
 def db_check_contracts (conn, min_security, max_volume):
+    print ("Fetching contracts from database")
     sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY priority DESC, profit_buy DESC"
     #sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY profit_sell DESC"
     c = conn.cursor()
     c.execute(sql)
     rows = c.fetchall()
     for row in rows:
-        process_row (row)
+        if process_row (row) == -1:
+            return
+
 
 def main():
     global conn
@@ -153,19 +166,24 @@ def main():
     global min_security
     global max_volume
     global char
+    global running
     char = esiChar("tokens.txt")
-    min_security = input ("Minimum security: ")
-    if min_security == "":
-        min_security = -1
-    max_volume = input ("Max volume: ")
-    if max_volume == "":
-        max_volume = 999999999999
-
-
+    
 
     conn = db_open_contract_db ()
     sde_conn = sql_sde_connect_to_db ()
-    db_check_contracts (conn, min_security, max_volume)
+    running = True
+    while running:
+        
+        min_security = input ("Minimum security: ")
+        if min_security == "":
+            min_security = -1
+        max_volume = input ("Max volume: ")
+        if max_volume == "":
+            max_volume = 999999999999
+
+        db_check_contracts (conn, min_security, max_volume)
+
     print ("Exiting....")
 
     

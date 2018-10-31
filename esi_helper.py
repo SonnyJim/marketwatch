@@ -12,6 +12,7 @@ import threading
 import smtplib
 from email.message import EmailMessage
 
+from functools import lru_cache
 from time import sleep
 from config import *
 
@@ -54,16 +55,29 @@ class esiChar:
         #print (str(api_info))
         print ("security: " + self.name + " authenticated for " + str(api_info['Scopes']))
 
+def esi_contract_is_still_valid (contract_id):
+    url = "https://esi.evetech.net/latest/contracts/public/bids/"+ str(contract_id) + "/?datasource=tranquility&page=1"
+    r = requests.get (url)
+    #TODO This is stupid, we assume if it's still valid because we don't need auth to fetch the bids
+    if r.status_code == 403:
+        return False
+    elif r.status_code == 404:
+        return False
+    else:
+        return True
+
+@lru_cache(maxsize=1024)
 def esi_get_structure_information (structure_id, char):
     op = char.app.op['universe_structures_structure_id'](structure_id=structure_id)
     r = char.client.request(op)
 
     if r.status != 200:
         print ("distance: Couldn't get solar system for structure: error " + str(r.status))
-        return -1
+        return None
     return r.data
 
 
+@lru_cache(maxsize=1024)
 def esi_get_station_information (station_id, char):
     op = char.app.op['universe_stations_station_id'](station_id=station_id)
     r = char.client.request(op)
@@ -73,6 +87,7 @@ def esi_get_station_information (station_id, char):
         return None
     return r.data
 
+@lru_cache(maxsize=1024)
 def esi_distance_from_station (origin, destination, flag, char):
     #print ("distance: Calculating route from " + str(origin) + " to " + str(destination))
     op = char.app.op['get_route_origin_destination'](origin=origin, destination=destination, flag=flag)
@@ -89,12 +104,22 @@ def esi_get_status ():
     print ("Checking ESI status:")
     url = "https://esi.evetech.net/latest/status/?datasource=tranquility"
     r = requests.get (url)
-    print (r.status_code)
     if r.status_code != 200:
         return False
     else:
         return True
 
+@lru_cache(maxsize=1024)
+def esi_get_info_for_typeid (type_id):
+    url = "https://esi.evetech.net/latest/universe/types/"+ str(type_id)+"/?datasource=tranquility&language=en-us"
+    r = requests.get (url)
+    if r.status_code != 200:
+        return
+    data = json.loads(r.text)
+    return data
+
+
+@lru_cache(maxsize=1024)
 def esi_get_name_from_id (type_id):
     url = "https://esi.evetech.net/latest/universe/names/?datasource=tranquility"
     post = "[ " + str(type_id) + " ]"

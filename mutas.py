@@ -19,6 +19,7 @@ cache = FileCache(path="/tmp")
 from esi_helper import esiChar
 from esi_helper import esi_get_structure_information
 from esi_helper import esi_get_status
+from esi_helper import esi_get_info_for_typeid
 
 from time import sleep
 
@@ -167,6 +168,12 @@ def create_appraisal (contract_items, is_included):
         
         #Fetch the name, as evepraisal seems to work that way
         name = get_name_from_type_id (db_sde, contract_item['type_id'])
+        
+        #Couldn't find the name from SDE, let's ask the ESI
+        if name == "Error":
+            typeid_info = esi_get_info_for_typeid (contract_item['type_id'])
+            name = typeid_info['name']
+
         if "Abyssal" in name:
             continue
 
@@ -213,11 +220,15 @@ def check_contract_items_for_fitted_rigs (contract_items):
 
     for item in contract_items:
         groupid = get_group_id_from_type_id (db_sde, item['type_id'])
-        if groupid in rig_groupids:
+        #Couldn't find the groupid in the SDE, so let's ask the ESI instead
+        if groupid == 'Error':
+            item_info = esi_get_info_for_typeid (item['type_id'])
+            groupid = item_info['group_id']
+        if groupid in rig_groupids and 'is_blueprint_copy' not in item:
+            #Skipping item as it's probably a rig
+            #TODO figure out someway of checking if it's fitted (singleton?)
+            #print ("item type " + str(item['type_id']) + " is a rig in group " + str(groupid))
             print (item)
-            print ("item type " + str(item['type_id']) + " is a rig in group " + str(groupid))
-            print ("It's record id is " + str(item['record_id']))
-            #input ()
         else:
             contract_items_minus_rigs.append (item)
 
@@ -380,7 +391,7 @@ def check_region (region_id):
         if dont_count_rigs:
             contract_items = check_contract_items_for_fitted_rigs (contract_items)
         #Strip out any items we can't sell via the market
-        contract_items = check_contract_items_for_marketable_items (contract_items)
+        #contract_items = check_contract_items_for_marketable_items (contract_items)
         if contract_items == None:
             print ("Error:  Couldn't find any contract items")
             broken_contracts.append (contract_id)
@@ -484,6 +495,7 @@ def main():
 
     print ("Startin' muta watch")
     print ("Searching regions:")
+    print ("10000038 The Bleak Lands")
     print ("10000052 Kador")
     print ("10000069 Black Rise")
     print ("10000068 Verge Vendor")
@@ -505,7 +517,7 @@ def main():
     forbidden_structures = []
     broken_contracts = []
 
-    regions = (10000052, 10000069, 10000068, 10000016, 10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
+    regions = (10000038, 10000052, 10000069, 10000068, 10000016, 10000067, 10000065, 10000020, 10000001, 10000036, 10000030, 10000042, 10000002, 10000037, 10000032, 10000033, 10000043, 10000064)
     verbose = False
     dont_count_rigs = True
     db_sde = sql_sde_connect_to_db ()

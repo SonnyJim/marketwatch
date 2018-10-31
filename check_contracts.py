@@ -18,8 +18,21 @@ from esi_helper import esi_get_structure_information
 from esi_helper import esiChar
 from esi_helper import esi_distance_from_station
 from esi_helper import esi_open_ui_for_contract
+from esi_helper import esi_contract_is_still_valid
 
 cache = FileCache(path="/tmp")
+
+def check_if_expired (expiry_str):
+    now = datetime.datetime.now(tz=pytz.utc)
+    
+    expiry_unaware = datetime.datetime.strptime(expiry_str, '%Y-%m-%dT%H:%M:%SZ')
+    expiry = pytz.utc.localize(expiry_unaware)
+    
+    if expiry < now:
+        return True
+    else:
+        return False
+
 
 def db_open_contract_db ():
     print ("Opening connection to contract database")
@@ -46,6 +59,17 @@ def process_row (row):
     dest_system_id = row[16]
     
     print ("Checking contract " + str(contract_id))
+
+    if check_if_expired (expiry):
+        print ("Ignoring contract because it has expired")
+        delete_contract (contract_id)
+        return
+
+    if esi_contract_is_still_valid (contract_id) == False:
+        print ("Contract is finished")
+        delete_contract (contract_id)
+        return
+
     if security < float(min_security):
         print ("Ignoring contract due to low security")
         return
@@ -148,9 +172,17 @@ def update_contract_system (contract_id, system_id):
     c.execute (sql)
     conn.commit()
 
-def db_check_contracts (conn, min_security, max_volume):
+def db_get_contracts (conn, min_security, max_volume, region, system):
     print ("Fetching contracts from database")
-    sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY priority DESC, profit_buy DESC"
+    sql = "SELECT * FROM contracts WHERE security >= " + str(min_security)
+    sql += " and volume <= " + str(max_volume) + " and profit_buy > 0"
+    
+    if region is not "":
+        sql += " and region_id is " + str(region)
+    elif system is not "":
+        sql += " and system_id is " + str(system)
+
+    sql += " ORDER BY priority DESC, profit_buy DESC"
     #sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY profit_sell DESC"
     c = conn.cursor()
     c.execute(sql)
@@ -181,8 +213,12 @@ def main():
         max_volume = input ("Max volume: ")
         if max_volume == "":
             max_volume = 999999999999
+        
+        region = input ("Limit to region: ")
+        if region is "":
+            system = input ("Limit to system: ")
 
-        db_check_contracts (conn, min_security, max_volume)
+        db_get_contracts (conn, min_security, max_volume, region, system)
 
     print ("Exiting....")
 

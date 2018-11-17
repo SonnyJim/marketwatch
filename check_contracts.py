@@ -17,8 +17,10 @@ from esi_helper import esi_get_station_information
 from esi_helper import esi_get_structure_information
 from esi_helper import esiChar
 from esi_helper import esi_distance_from_station
+from esi_helper import esi_get_route
 from esi_helper import esi_open_ui_for_contract
 from esi_helper import esi_contract_is_still_valid
+from esi_helper import esi_get_player_location
 
 cache = FileCache(path="/tmp")
 
@@ -40,6 +42,19 @@ def db_open_contract_db ():
     conn = sqlite3.connect(db_contract_file)
     return conn
 
+def contract_still_available (contract_id, expiry):
+    if check_if_expired (expiry):
+        print ("Contract has expired, removing")
+        delete_contract (contract_id)
+        return False
+
+    if esi_contract_is_still_valid (contract_id) == False:
+        print ("Contract is finished, removing")
+        delete_contract (contract_id)
+        return False
+
+    return True
+
 def process_row (row):
     contract_id = row[0]
     location_id = row[2]
@@ -59,25 +74,20 @@ def process_row (row):
     dest_system_id = row[16]
     
     print ("Checking contract " + str(contract_id))
-
-    if check_if_expired (expiry):
-        print ("Ignoring contract because it has expired")
-        delete_contract (contract_id)
-        return
-
-    if esi_contract_is_still_valid (contract_id) == False:
-        print ("Contract is finished")
-        delete_contract (contract_id)
-        return
-
-    if security < float(min_security):
-        print ("Ignoring contract due to low security")
-        return
     
-    if volume > float(max_volume) and max_volume != 0:
-        print ("Ignoring contract due to max volume")
-        return
+    if contract_still_available (contract_id, expiry) == False:
+        return 0
     
+    #Should need to do this as we specify max volume when we query the DB
+    #if volume > float(max_volume) and max_volume != 0:
+    #    print ("Ignoring contract due to max volume")
+    #    return
+
+    #if security < float(min_security):
+    #    print ("Ignoring contract due to low security")
+    #    return
+
+    #Why is this code here?  Is it because we sometimes don't get the system_id? 
     if dest_system_id is "" or dest_system_id is 0 or dest_system_id is None: 
         if len(str(location_id)) == 8:
             dest_system_id = get_station_system(sde_conn, location_id)
@@ -90,14 +100,10 @@ def process_row (row):
             else:
                 location_name = 'Forbidden'
                 dest_system_id = 0
-    
-    update_contract_system (contract_id, dest_system_id)
+        update_contract_system (contract_id, dest_system_id)
 
     distance = esi_distance_from_station (system_id, dest_system_id, "secure", char)
     
-    #if priority == 0:
-    #    print ("Not worth my time, mate")
-    #    return
 
     print (items)
 
@@ -144,10 +150,13 @@ def process_row (row):
     elif new_priority == "g":
         get_contract_authed (contract_id)
     elif new_priority == "q":
-        exit()
+        return -2
     elif new_priority == "r":
         print ("Restarting")
         return -1
+    elif new_priority == "R":
+        print ("Checking route")
+        return dest_system_id
 
     return 0
 
@@ -172,25 +181,67 @@ def update_contract_system (contract_id, system_id):
     c.execute (sql)
     conn.commit()
 
-def db_get_contracts (conn, min_security, max_volume, region, system):
+def prune_contracts (rows):
+    print ("Pruning contracts")
+    contracts_pruned = 0
+    for row in rows:
+        contract_id = row[0]
+        expiry = row[10]
+        print ("Checking contract " + str(contract_id))
+        if contract_still_available (contract_id, expiry) == False:
+            contracts_pruned += 1
+
+    print ("Pruned " +str(contracts_pruned)+" contracts from database")
+    
+    
+
+def check_contracts (rows):
+    if len(rows) == 0:
+        print ("No contracts found")
+        return 0
+    for row in rows:
+        r = process_row (row)
+        if r != 0:
+            return r
+
+def db_get_contracts (conn, min_security, max_volume, region, systems):
     print ("Fetching contracts from database")
     sql = "SELECT * FROM contracts WHERE security >= " + str(min_security)
-    sql += " and volume <= " + str(max_volume) + " and profit_buy > 0"
+    sql += " and profit_buy > 0"
+    
+    if max_volume is not "":
+        sql += " and volume <= " + str(max_volume)
     
     if region is not "":
         sql += " and region_id is " + str(region)
-    elif system is not "":
-        sql += " and system_id is " + str(system)
+    elif systems is not "":
+        if isinstance(systems,list):
+            sql += " and ("
+            for system in systems:
+                sql += "system_id='" + str(system) + "'"
+                if system != systems[-1]:
+                    sql += " OR "
+            sql += ")"
+
+        else:
+            sql += " and system_id is " + str(systems)
+
 
     sql += " ORDER BY priority DESC, profit_buy DESC"
     #sql = "SELECT * FROM contracts WHERE security >= " + str(min_security) + " and volume < " + str(max_volume) + " ORDER BY profit_sell DESC"
+    print (sql)
     c = conn.cursor()
     c.execute(sql)
     rows = c.fetchall()
-    for row in rows:
-        if process_row (row) == -1:
-            return
+    return rows
+#    for row in rows:
+#    if process_row (row) == -1:
+#            return
 
+
+def get_player_location (char):
+    location = esi_get_player_location (char);
+    return location.solar_system_id
 
 def main():
     global conn
@@ -201,24 +252,38 @@ def main():
     global running
     char = esiChar("tokens.txt")
     
-
     conn = db_open_contract_db ()
     sde_conn = sql_sde_connect_to_db ()
     running = True
+    prune = False
+    contracts_return = 0
     while running:
-        
+       
+        if prune:
+            rows = db_get_contracts (conn, -1, 99999999999, "", "")
+            prune_contracts (rows)
+            exit ()
+
         min_security = input ("Minimum security: ")
         if min_security == "":
             min_security = -1
         max_volume = input ("Max volume: ")
-        if max_volume == "":
-            max_volume = 999999999999
         
-        region = input ("Limit to region: ")
-        if region is "":
-            system = input ("Limit to system: ")
+        if contracts_return > 0:
+            systems = esi_get_route (system_id, contracts_return, "secure", char)
+            print (isinstance(systems, list))
 
-        db_get_contracts (conn, min_security, max_volume, region, system)
+            rows = db_get_contracts (conn, min_security, max_volume, "", systems)
+        else:
+            region = input ("Limit to region: ")
+            if region is "":
+                system = input ("Limit to system: ")
+                if system == "c":
+                    system = get_player_location (char)
+                rows = db_get_contracts (conn, min_security, max_volume, region, system)
+        contracts_return = check_contracts (rows)
+        if contracts_return == -2:
+            running = False
 
     print ("Exiting....")
 

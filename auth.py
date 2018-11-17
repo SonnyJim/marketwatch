@@ -14,7 +14,8 @@ mail_scopes=['esi-mail.send_mail.v1']
     
 industry_scopes=['esi-markets.read_corporation_orders.v1', 'esi-mail.read_mail.v1', 
         'esi-ui.open_window.v1', 'esi-industry.read_corporation_jobs.v1',
-        'esi-corporations.read_blueprints.v1']
+        'esi-corporations.read_blueprints.v1', 'esi-universe.read_structures.v1',
+        'esi-location.read_location.v1', 'esi-location.read_online.v1', 'esi-location.read_ship_type.v1']
 
 def do_security (tokens_file, scopes):
     esi_app = EsiApp(cache=cache, cache_time=0)

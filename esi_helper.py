@@ -55,6 +55,17 @@ class esiChar:
         #print (str(api_info))
         print ("security: " + self.name + " authenticated for " + str(api_info['Scopes']))
 
+def esi_get_player_location (char):
+    #url = "https://esi.evetech.net/latest/characters/"+ str(character_id) +"/location/?datasource=tranquility"
+    op = char.app.op['characters_character_id_location'](character_id=character_id)
+    r = char.client.request(op)
+
+    if r.status != 200:
+        print ("location: Couldn't fetch player location: error " + str(r.status))
+        return None
+    return r.data
+
+
 def esi_contract_is_still_valid (contract_id):
     url = "https://esi.evetech.net/latest/contracts/public/bids/"+ str(contract_id) + "/?datasource=tranquility&page=1"
     r = requests.get (url)
@@ -87,27 +98,29 @@ def esi_get_station_information (station_id, char):
         return None
     return r.data
 
-@lru_cache(maxsize=1024)
-def esi_distance_from_station (origin, destination, flag, char):
-    #print ("distance: Calculating route from " + str(origin) + " to " + str(destination))
+def esi_get_route (origin, destination, flag, char):
     op = char.app.op['get_route_origin_destination'](origin=origin, destination=destination, flag=flag)
     r = char.client.request(op)
-
     if r.status != 200:
-        print ("distance: Couldn't get distance from station: error " + str(r.status))
+        print ("esi_get_route: Couldn't get distance from station: error " + str(r.status))
         return -1
+    return r.data
 
-    distance = len(r.data)
-    return distance
+
+@lru_cache(maxsize=1024)
+def esi_distance_from_station (origin, destination, flag, char):
+    
+    r = esi_get_route (origin, destination, flag, char)
+    if r == -1:
+        return -1
+    else:
+        return len(r)
 
 def esi_get_status ():
     print ("Checking ESI status:")
     url = "https://esi.evetech.net/latest/status/?datasource=tranquility"
     r = requests.get (url)
-    if r.status_code != 200:
-        return False
-    else:
-        return True
+    return r.status_code
 
 @lru_cache(maxsize=1024)
 def esi_get_info_for_typeid (type_id):

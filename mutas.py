@@ -30,7 +30,8 @@ from time import sleep
 #Log contract_ids we couldn't complete for further inspection
 #Log 403 structures so we aren't wasting time checking them again
 #Reduce the amount of calls when checking for rigs
-#Prune expired or completed contracts
+#Prune expired or completed contracts - I do this via check_contracts.
+#Add in ETA for finished scanning region
 
 
 def db_open_contract_db ():
@@ -193,7 +194,16 @@ def get_rig_groupids():
     print ("Ignoring group IDs: ")
     print (r)
     return r
- 
+
+def get_crystal_groupids():
+    sql = "select groupID from invGroups where groupName like '%Crystal%'"
+    c = db_sde.cursor()
+    c.execute(sql)
+    r = c.fetchall()
+    print ("Ignoring crystal group IDs: ")
+    print (r)
+    return r
+
 def check_contract_items_for_marketable_items (contract_items):
     if verbose:
         print ("Checking contract items for stuff we can sell via the market")
@@ -224,10 +234,11 @@ def check_contract_items_for_fitted_rigs (contract_items):
         if groupid == 'Error':
             item_info = esi_get_info_for_typeid (item['type_id'])
             groupid = item_info['group_id']
-        if groupid in rig_groupids and 'is_blueprint_copy' not in item:
+        if (groupid in rig_groupids and 'is_blueprint_copy' not in item) or (groupid in crystal_groupids and 'is_bluerint_copy' not in item):
             #Skipping item as it's probably a rig
             #TODO figure out someway of checking if it's fitted (singleton?)
             #print ("item type " + str(item['type_id']) + " is a rig in group " + str(groupid))
+            print ("Skipping item:")
             print (item)
         else:
             contract_items_minus_rigs.append (item)
@@ -402,9 +413,13 @@ def check_region (region_id):
         # Fetch the text names for the items and split them up into items and items wanted in exchange
         items = create_appraisal (contract_items, False)
         items_exchange = create_appraisal (contract_items, True)
-
-        appraisal = fetch_appraisal (items, contract_items)
-        appraisal_exchange = fetch_appraisal (items_exchange, contract_items)
+    
+        try:
+            appraisal = fetch_appraisal (items, contract_items)
+            appraisal_exchange = fetch_appraisal (items_exchange, contract_items)
+        except:
+            logging.error ("Couldn't fetch appraisal")
+            continue
         
         if appraisal is None:
             if verbose:
@@ -488,6 +503,7 @@ def main():
     global db_contract
     global verbose
     global rig_groupids
+    global crystal_groupids
     global dont_count_rigs
     global char # Class that holds all the security gubbins for ESI
     global forbidden_structures
@@ -527,14 +543,23 @@ def main():
     char = esiChar("tokens.txt") #Currently only used to get structure solarsystem
     
     rig_groupids = get_rig_groupids ()
-    while esi_get_status () != True:
-        print ("ESI unavailable")
-        sleep (30)
-
+    crystal_groupids = get_crystal_groupids ()
+    esi_status = esi_get_status ()
     while (1):
-        for region_id in regions:
-            check_region (region_id)
-    print ("Exiting....")
+        #Wait for the ESI to be ready
+        while esi_status != 200:
+            print ("ESI unavailable: " +str(esi_status))
+            sleep (30)
+        
+        #Go get some contracts and fall back to waiting for ESI if it fails
+        try:
+            while (1):
+                for region_id in regions:
+                    check_region (region_id)
+        except:
+            print ("Something went wrong whilst fetching the contracts")
+            logging.error ("Something went wrong in the main loop")
+            sleep (10)
 
     
 if __name__ == "__main__":
